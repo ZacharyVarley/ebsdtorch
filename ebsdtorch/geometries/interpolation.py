@@ -10,8 +10,8 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
     """
 
     # constants
-    TWO_DIV_SQRT8 = 0.7071067811865475   # 2 / sqrt(8)
-    TWOSQRT2_DIV_PI = 0.9003163161571062 # 2 * sqrt(2) / pi
+    TWO_DIV_SQRT8 = 0.7071067811865475  # 2 / sqrt(8)
+    TWOSQRT2_DIV_PI = 0.9003163161571062  # 2 * sqrt(2) / pi
 
     # Define output tensor
     out = torch.empty((pts.shape[0], 2), dtype=pts.dtype, device=pts.device)
@@ -45,8 +45,51 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
     # where close to (0, 0, 1), map to (0, 0)
     at_pole = torch.abs(pts[:, 2]) > 0.99999999
     out[at_pole] = 0.0
-    
+
     return out
+
+
+@torch.jit.script
+def inv_square_lambert(pts: torch.Tensor) -> torch.Tensor:
+    """
+    Map (-1, 1) X (-1, 1) square to Northern hemisphere via inverse square lambert projection.
+
+    :param pts: torch tensor of shape (..., 2) containing the points
+    :return: torch tensor of shape (..., 3) containing the projected points
+
+    """
+
+    # move points form [-1, 1] X [-1, 1] to [0, 1] X [0, 1]
+    pi = torch.pi
+
+    a = pts[..., 0] * 1.25331413732 # sqrt(pi / 2)
+    b = pts[..., 1] * 1.25331413732 # sqrt(pi / 2)
+
+    # mask for branch
+    go = torch.abs(b) <= torch.abs(a)
+
+    output = torch.empty((pts.shape[0], 3), dtype=pts.dtype, device=pts.device)
+
+    output[go, 0] = (2 * a[go] / pi) * torch.sqrt(pi - a[go]**2) * torch.cos((pi * b[go]) / (4 * a[go]))
+    output[go, 1] = (2 * a[go] / pi) * torch.sqrt(pi - a[go]**2) * torch.sin((pi * b[go]) / (4 * a[go]))
+    output[go, 2] = 1 - (2 * a[go]**2 / pi)
+
+    output[~go, 0] = (2 * b[~go] / pi) * torch.sqrt(pi - b[~go]**2) * torch.sin((pi * a[~go]) / (4 * b[~go]))
+    output[~go, 1] = (2 * b[~go] / pi) * torch.sqrt(pi - b[~go]**2) * torch.cos((pi * a[~go]) / (4 * b[~go]))
+    output[~go, 2] = 1 - (2 * b[~go]**2 / pi)
+
+    return output
+
+
+# # test that the square lambert projection is the inverse of the inverse square lambert projection
+# pts = torch.randn((10000, 3), dtype=torch.float64)
+# pts_sphere = pts / torch.norm(pts, dim=1, keepdim=True)
+# pts_sphere[:, 2] = torch.abs(pts_sphere[:, 2])
+# pts_plane = square_lambert(pts_sphere)
+# pts_sphere2 = inv_square_lambert(pts_plane)
+# print(torch.max(torch.abs(pts_sphere - pts_sphere2)))
+# print(pts_sphere.min(), pts_sphere.max())
+# print(pts_sphere2.min(), pts_sphere2.max())
 
 
 # @torch.jit.script
@@ -86,12 +129,12 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
 #     return out / ROOT_PIDIV2
 
 
-# # generate 10 points on the sphere and then use each implementation of the square lambert projection
-# # to map them to the unit square and compare the results
+# generate points on the sphere and then use each implementation of the square lambert projection
+# to map them to the unit square and compare the results
 
 # # generate the points
-# pts = torch.randn((10000, 3), dtype=torch.float32)
-# pts = pts / torch.norm(pts, dim=1, keepdim=True)
+# pts = torch.randn((1000, 3), dtype=torch.float64)
+# pts = pts / torch.norm(pts, dim=-1, keepdim=True)
 
 # # move all the points to the northern hemisphere
 # pts[:, 2] = torch.abs(pts[:, 2])
@@ -104,10 +147,8 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
 
 # # map the points to the unit square
 # pts1 = square_lambert(pts)
-# pts2 = square_lambert_two(pts)
 
 # # plot the results using plotly
-
 # import plotly.graph_objects as go
 
 # # make two plots for each implementation
@@ -132,3 +173,24 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
 # )
 # fig.show()
 
+# # do the inverse square lambert projection and plot the results
+# pts2 = inv_square_lambert(pts1)
+# fig = go.Figure(
+#     data=[
+#         go.Scatter3d(
+#             x=pts[:, 0],
+#             y=pts[:, 1],
+#             z=pts[:, 2],
+#             mode="markers",
+#             marker=dict(size=2, color=colors),
+#         ),
+#         go.Scatter3d(
+#             x=pts2[:, 0],
+#             y=pts2[:, 1],
+#             z=pts2[:, 2],
+#             mode="markers",
+#             marker=dict(size=2, color=colors),
+#         ),
+#     ]
+# )
+# fig.show()

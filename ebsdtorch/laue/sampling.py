@@ -4,6 +4,40 @@ from ebsdtorch.laue.orientations import cu2ho, ho2qu, standardize_quaternion
 
 
 @torch.jit.script
+def theta_phi_to_xyz(theta: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
+    """
+    Convert spherical coordinates to cartesian coordinates.
+    :param theta: torch tensor of shape (n, ) containing the polar declination angles
+    :param phi: torch tensor of shape (n, ) containing the azimuthal angles
+    :return: torch tensor of shape (n, 3) containing the cartesian coordinates
+    """
+    return torch.stack(
+        (
+            torch.cos(theta) * torch.sin(phi),
+            torch.sin(theta) * torch.sin(phi),
+            torch.cos(phi),
+        ),
+        dim=1,
+    )
+
+
+@torch.jit.script
+def xyz_to_theta_phi(xyz: torch.Tensor) -> torch.Tensor:
+    """
+    Convert cartesian coordinates to latitude and longitude.
+    :param xyz: torch tensor of shape (n, 3) containing the cartesian coordinates
+    :return: torch tensor of shape (n, 2) containing the polar declination and azimuthal angles
+    """
+    return torch.stack(
+        (
+            torch.atan2(torch.norm(xyz[:, :2], dim=1), xyz[:, 2]),
+            torch.atan2(xyz[:, 1], xyz[:, 0]),
+        ),
+        dim=1,
+    )
+
+
+@torch.jit.script
 def s2_fibonacci_lattice(n: int, mode: str = "avg") -> torch.Tensor:
     """
     Sample n points on the unit sphere using the Fibonacci spiral method.
@@ -37,18 +71,11 @@ def s2_fibonacci_lattice(n: int, mode: str = "avg") -> torch.Tensor:
             epsilon = 0.33
     else:
         raise ValueError('mode must be either "avg" or "max"')
-    # generate the points
+    # generate the points (they must be doubles for large numbers of points)
     indices = torch.arange(n, dtype=torch.float64)
     theta = 2 * torch.pi * indices / phi
     phi = torch.acos(1 - 2 * (indices + epsilon) / (n - 1 + 2 * epsilon))
-    points = torch.stack(
-        (
-            torch.cos(theta) * torch.sin(phi),
-            torch.sin(theta) * torch.sin(phi),
-            torch.cos(phi),
-        ),
-        dim=1,
-    )
+    points = theta_phi_to_xyz(theta, phi)
     return points.float()
 
 
