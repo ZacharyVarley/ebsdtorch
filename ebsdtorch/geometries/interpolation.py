@@ -5,48 +5,53 @@ import torch
 def square_lambert(pts: torch.Tensor) -> torch.Tensor:
     """
     Map unit sphere to (-1, 1) X (-1, 1) square via square lambert projection.
-    :param pts: torch tensor of shape (n, 3) containing the points
-    :return: torch tensor of shape (n, 2) containing the projected points
+    :param pts: torch tensor of shape (..., 3) containing the points
+    :return: torch tensor of shape (..., 2) containing the projected points
     """
 
     # constants
     TWO_DIV_SQRT8 = 0.7071067811865475  # 2 / sqrt(8)
     TWOSQRT2_DIV_PI = 0.9003163161571062  # 2 * sqrt(2) / pi
 
+    shape_in = pts.shape[:-1]
+
+    # x-axis and y-axis on the plane are labeled a and b
+    x, y, z = torch.unbind(pts.reshape(-1, 3), dim=-1)
+
     # Define output tensor
-    out = torch.empty((pts.shape[0], 2), dtype=pts.dtype, device=pts.device)
+    out = torch.empty((len(x), 2), dtype=pts.dtype, device=pts.device)
 
     # Define conditions and calculations
-    cond = torch.abs(pts[:, 1]) <= torch.abs(pts[:, 0])
-    factor = torch.sqrt(2.0 * (1.0 - torch.abs(pts[:, 2])))
+    cond = torch.abs(y) <= torch.abs(x)
+    factor = torch.sqrt(2.0 * (1.0 - torch.abs(z)))
 
     # instead of precalcuating each branch, just use the condition to select the correct branch
-    out[cond, 0] = torch.sign(pts[cond, 0]) * factor[cond] * TWO_DIV_SQRT8
+    out[cond, 0] = torch.sign(x[cond]) * factor[cond] * TWO_DIV_SQRT8
     out[cond, 1] = (
-        torch.sign(pts[cond, 0])
+        torch.sign(x[cond])
         * factor[cond]
         * torch.atan2(
-            pts[cond, 1] * torch.sign(pts[cond, 0]),
-            pts[cond, 0] * torch.sign(pts[cond, 0]),
+            y[cond] * torch.sign(x[cond]),
+            x[cond] * torch.sign(x[cond]),
         )
         * TWOSQRT2_DIV_PI
     )
     out[~cond, 0] = (
-        torch.sign(pts[~cond, 1])
+        torch.sign(y[~cond])
         * factor[~cond]
         * torch.atan2(
-            pts[~cond, 0] * torch.sign(pts[~cond, 1]),
-            pts[~cond, 1] * torch.sign(pts[~cond, 1]),
+            x[~cond] * torch.sign(y[~cond]),
+            y[~cond] * torch.sign(y[~cond]),
         )
         * TWOSQRT2_DIV_PI
     )
-    out[~cond, 1] = torch.sign(pts[~cond, 1]) * factor[~cond] * TWO_DIV_SQRT8
+    out[~cond, 1] = torch.sign(y[~cond]) * factor[~cond] * TWO_DIV_SQRT8
 
     # where close to (0, 0, 1), map to (0, 0)
-    at_pole = torch.abs(pts[:, 2]) > 0.99999999
+    at_pole = torch.abs(z) > 0.99999999
     out[at_pole] = 0.0
 
-    return out
+    return out.reshape(shape_in + (2,))
 
 
 @torch.jit.script
@@ -129,8 +134,8 @@ def inv_square_lambert(pts: torch.Tensor) -> torch.Tensor:
 #     return out / ROOT_PIDIV2
 
 
-# generate points on the sphere and then use each implementation of the square lambert projection
-# to map them to the unit square and compare the results
+# # generate points on the sphere and then use each implementation of the square lambert projection
+# # to map them to the unit square and compare the results
 
 # # generate the points
 # pts = torch.randn((1000, 3), dtype=torch.float64)

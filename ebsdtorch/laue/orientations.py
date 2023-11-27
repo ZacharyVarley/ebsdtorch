@@ -151,6 +151,43 @@ def quaternion_apply(quaternion: torch.Tensor, point: torch.Tensor) -> torch.Ten
 
 
 @torch.jit.script
+def quaternion_rotate_sets_sphere(points_start: torch.Tensor,
+                                  points_finish) -> torch.Tensor:
+    """
+    Determine the quaternions that rotate the points_start to the points_finish.
+    All points are assumed to be on the unit sphere. The cross product is used
+    as the axis of rotation, but there are an infinite number of quaternions that
+    fulfill the requirement as the points can be rotated around their axis by
+    an arbitrary angle, and they will still have the same latitude and longitude.
+
+    Args:
+        points_start: Starting points as tensor of shape (..., 3).
+        points_finish: Ending points as tensor of shape (..., 3).
+
+    Returns:
+        The quaternions, as tensor of shape (..., 4).
+
+    """
+    # determine mask for numerical stability
+    valid = torch.abs(torch.sum(points_start * points_finish, dim=-1)) < 0.999999
+    # get the cross product of the two sets of points
+    cross = torch.cross(points_start[valid], points_finish[valid], dim=-1)
+    # get the dot product of the two sets of points
+    dot = torch.sum(points_start[valid] * points_finish[valid], dim=-1)
+    # get the angle
+    angle = torch.atan2(torch.norm(cross, dim=-1), dot)
+    # add tau to the angle if the cross product is negative
+    angle[angle < 0] += 2 * torch.pi
+    # set the output
+    out = torch.empty((points_start.shape[0], 4), dtype=points_start.dtype, device=points_start.device)
+    out[valid, 0] = torch.cos(angle / 2)
+    out[valid, 1:] = torch.sin(angle / 2)[:, None] * (cross / torch.norm(cross, dim=-1, keepdim=True))
+    out[~valid, 0] = 1
+    out[~valid, 1:] = 0
+    return out
+
+
+@torch.jit.script
 def misorientation_angle(quaternion: torch.Tensor) -> torch.Tensor:
     """
     Compute the misorientation angle for a quaternion.
