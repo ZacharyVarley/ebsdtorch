@@ -62,26 +62,23 @@ from ebsdtorch.laue.sampling import s2_fibonacci_lattice, theta_phi_to_xyz, xyz_
 #     # interpolate the square Lambert projection onto the sphere
 #     planar_coords = square_lambert(xyz_pts).to(square_lambert_mp.dtype).reshape(1, nlat, nlon, 2)
 
-#     print("planar_coords_minmax", planar_coords[..., 0].min(), planar_coords[..., 0].max())
-#     print("planar_coords_minmax", planar_coords[..., 1].min(), planar_coords[..., 1].max())
-
 #     mp_values_GL_grid = torch.nn.functional.grid_sample(
-#         square_lambert_mp[None, None, :, :, 0],
+#         square_lambert_mp[None, :, :, :],
 #         planar_coords,
 #         align_corners=True,
-#     ).squeeze().reshape(1, nlat, nlon).double()
+#     ).squeeze().double()
+
+#     print("mp_values_GL_grid.shape", mp_values_GL_grid.shape)
 
 #     # make an indicator for the points in the annulus
 #     annulus_mask = ((theta_phi_pts[..., 0] > inner_opening_angle) 
 #                     & (theta_phi_pts[..., 0] < outer_opening_angle))
 #     annulus_mask_GL_grid = annulus_mask.reshape(1, nlat, nlon).double()
 
-#     print("mean annulus_mask", annulus_mask_GL_grid.mean())
-
-#     # perform convolution 
+#     # perform convolution
 #     mp_values_GL_grid_sht = sht(mp_values_GL_grid)
 #     annulus_mask_GL_grid_sht = sht(annulus_mask_GL_grid)
-#     mp_blurred_GL_grid_sht = mp_values_GL_grid_sht * annulus_mask_GL_grid_sht
+#     mp_blurred_GL_grid_sht = mp_values_GL_grid_sht * annulus_mask_GL_grid_sht.conj()
 
 #     # convert back to grid
 #     mp_blurred_GL_grid = isht(mp_blurred_GL_grid_sht)
@@ -112,15 +109,18 @@ from ebsdtorch.laue.sampling import s2_fibonacci_lattice, theta_phi_to_xyz, xyz_
 #     # rescale phi from [-pi, pi] to [-1, 1]
 #     theta_phi_grid[..., 1] = (theta_phi_grid[..., 1] / np.pi)
 
+#     print("post theta_minmax", theta_phi_grid[..., 0].min(), theta_phi_grid[..., 0].max())
+#     print("post phi_minmax", theta_phi_grid[..., 1].min(), theta_phi_grid[..., 1].max())
+
+#     print("mp_blurred_GL_grid.shape", mp_blurred_GL_grid.shape)
+#     print("theta_phi_grid.shape", theta_phi_grid.shape)
 
 #     # interpolate the theta_phi_grid points with the blurred mp values using grid_sample
 #     mp_blurred = torch.nn.functional.grid_sample(
-#         mp_blurred_GL_grid[:, None, :, :],
+#         mp_blurred_GL_grid[None, :, :, :],
 #         theta_phi_grid,
 #         align_corners=True,
-#     ).squeeze().reshape(square_lambert_mp.shape[1], square_lambert_mp.shape[2])
-
-#     print("mp_blurred.shape", mp_blurred.shape)
+#     ).squeeze().reshape(2, square_lambert_mp.shape[1], square_lambert_mp.shape[2])
 
 #     return mp_blurred
 
@@ -153,6 +153,8 @@ from ebsdtorch.laue.sampling import s2_fibonacci_lattice, theta_phi_to_xyz, xyz_
 
 # mp_blurred = annulus_bse_detector_fft(mp, inner_opening_angle, outer_opening_angle)
 
+# print("mp_blurred.shape", mp_blurred.shape)
+
 # # renormalize the blurred master pattern
 # mp_blurred = (mp_blurred - mp_blurred.min()) / (mp_blurred.max() - mp_blurred.min())
 
@@ -160,7 +162,7 @@ from ebsdtorch.laue.sampling import s2_fibonacci_lattice, theta_phi_to_xyz, xyz_
 # from PIL import Image
 # mp_original_pil = Image.fromarray((mp[0, :, :] * 255).byte().cpu().numpy())
 # mp_original_pil.save('./scratch/Ni_20kV_EC_MP.png')
-# mp_blurred_pil = Image.fromarray((mp_blurred[:, :] * 255).byte().cpu().numpy())
+# mp_blurred_pil = Image.fromarray((mp_blurred[0, :, :] * 255).byte().cpu().numpy())
 # mp_blurred_pil.save('./scratch/Ni_20kV_EC_MP_blurred.png')
 
 # def save_master_pattern(master_pattern_path, master_pattern, scaffold_path):
@@ -172,8 +174,8 @@ from ebsdtorch.laue.sampling import s2_fibonacci_lattice, theta_phi_to_xyz, xyz_
 #     # open the file at the master pattern path
 #     with hf.File(master_pattern_path, 'r+') as f:
 #         # write the master pattern to the file
-#         f['EMData']['ECPmaster']['mLPNH'][...] = master_pattern[..., 1].cpu().numpy()
-#         f['EMData']['ECPmaster']['mLPSH'][...] = master_pattern[..., 0].cpu().numpy()
+#         f['EMData']['ECPmaster']['mLPNH'][...] = master_pattern[0, :, :].cpu().numpy()
+#         f['EMData']['ECPmaster']['mLPSH'][...] = master_pattern[1, :, :].cpu().numpy()
 
 # save_master_pattern('./scratch/Ni_20kV_EC_MP_blurred.h5', mp_blurred, './scratch/Ni_20kV_EC_MP.h5')
 
@@ -185,6 +187,7 @@ def annulus_bse_detector(
     inner_opening_angle: float,
     outer_opening_angle: float,
     n_s2_points: int = 100000,
+    limit_GB: int = 4,
 ) -> torch.Tensor:
     """Compute the area of a detector annulus in BSE coordinates.
 
@@ -207,10 +210,10 @@ def annulus_bse_detector(
 
     """
     # sample points on the sphere used for integration - returned as (n, 3) xyz coordinates
-    s2_points = s2_fibonacci_lattice(n_s2_points).float().to(square_lambert_mp.device)
+    s2_points = s2_fibonacci_lattice(n_s2_points).double().to(square_lambert_mp.device)
 
     # convert xyz coordinates to latitude and longitude
-    theta_phi_pts = xyz_to_theta_phi(s2_points).float()
+    theta_phi_pts = xyz_to_theta_phi(s2_points).double()
 
     # make an indicator for the points in the annulus
     annulus_mask = ((theta_phi_pts[:, 0] > inner_opening_angle) 
@@ -246,7 +249,7 @@ def annulus_bse_detector(
     print("mean_error:", (rotated_north_poles - grid_points_xyz).abs().mean())
 
     # calculate the batch size to keep the GPU memory usage under 1 GB
-    batch_size = int(1e9 / (annulus_points.shape[0] * 4))
+    batch_size = int(limit_GB * 1e9 / (annulus_points.shape[0] * 32))
 
     print("batch_size:", batch_size)
 
@@ -265,7 +268,7 @@ def annulus_bse_detector(
         # interpolate the rotated points onto the master pattern
         mp_blurred[i:i+batch_size] = torch.nn.functional.grid_sample(
             square_lambert_mp[None, None, :, :],
-            planar_coords[None, :, :, :],
+            planar_coords[None, :, :, :].float(),
             align_corners=True,
         ).squeeze().mean(dim=-1)
 
