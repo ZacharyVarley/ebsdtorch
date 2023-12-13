@@ -69,10 +69,6 @@ def wigner_d_naive_v3(l: int,
     coeff2 = sqrt(comb(2. * l - k, k + a))
     coeff3 = (1. / sqrt(comb(k + b, b)))
 
-    print("coeff1: {0}".format(coeff1))
-    print("coeff2: {0}".format(coeff2))
-    print("coeff3: {0}".format(coeff3))
-
     coeff = coeff1 * coeff2 * coeff3
 
     #print 'jacobi (exact)'
@@ -108,4 +104,12 @@ print(f"d(1, 0, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(1, 0, 0)(
 print(f"d(1, 1, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(1, 1, 0)(np.pi * 7117.0 / 16384.0)}")
 
 # print test with print out value of d(1, 1, 0), beta = (pi * 7117.0 / 16384.0)
-print(f"d(4, 1, 1) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(4, 1, 1)(np.pi * 7117.0 / 16384.0)}")
+print(f"d(5, 5, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(5, 5, 0)(np.pi * 7117.0 / 16384.0)}")
+
+
+# print test with print out value of d(1, 0, 0), beta = (pi * 7117.0 / 16384.0)
+for k in range(2):
+    for m in range(2):
+        for j in range(3):
+            if abs(m) <= j and abs(k) <= j:
+                print(f"d({j}, {k}, {m}) = {wigner_d_naive_v3(j, k, m)(np.pi / 4.0)}")

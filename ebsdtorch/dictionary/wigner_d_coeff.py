@@ -1,10 +1,11 @@
 from typing import Tuple
 import torch
 from torch import Tensor
-import numpy as np
-
+from extended_precision import x2f, xlsum2, x_norm
 
 """
+    -------------------
+
     See the following publications for an explanation of the recursive algorithm:
 
     "Numerical computation of spherical harmonics of arbitrary degree 
@@ -20,382 +21,434 @@ import numpy as np
 
     Both by Toshio Fukushima.
 
-    ---------------------------------------------
-    
+    -------------------
 
-    Using equations (10-16) from:
-    "Numerical computation of Wigner's d-function of arbitrary high 
-    degree and orders by extending exponent of floating point numbers"
+    I ended up directly porting the F90 code from the second paper, including
+    the X-number implementation found in the second paper. See wigner_d_coeff_reference.py 
+    for a reference for a detailed explanation.
 
-    d^j_km = a_jkm * d^(j-1) - b_jkm * d^(j-2)
+    The overall goal here is to relate the product of two spherical harmonics such
+    that an inverse Fourier transform yields the convolution of two spherical harmonics
+    over SO(3). The constant that should be multiplied by each spherical harmonic 
+    coefficient is the Wigner d-coefficient. If you choose to use the Wigner d-coefficient
+    to be Z-X-Z then half of them are purely imaginary, while if you choose to 
+    use Z-Y-Z then they are all real entries.
 
-    Note the following symmetry relations of the Wigner d-function:
+    wiki: https://en.wikipedia.org/wiki/Wigner_D-matrix
 
-    d^j_k_m(-BETA) = d^j_m_k(BETA)                       # Negating BETA is equivalent to swapping k and m
-    d^j_-k_-m = (-1)^(k-m) d^j_km                        # Negating k and m yields -1 to (k-m) power prefactor
-    d^j_k_-m(BETA) = (-1)^(j + k + 2m) d^j_km(π - BETA)  # Negating m yields -1 to (j + k + 2m) power prefactor and angle supplement
-    d^j_-k_m(BETA) = (-1)^(j + 2k + 3m) d^j_km(π - BETA) # Negating k yields -1 to (j + 2k + 3m) power prefactor and angle supplement
-    d^j_m_k = (-1)^(k-m) d^j_km                          # Swapping k and m yields -1 to (k-m) power prefactor
+    Our end goal is calculating d_jkm for all j, k, m in a given range with 
 
-    This means we can just calculate the non-negative values of k and m and then fill in the rest using the symmetry relations.
+    j = 0, 1, 2, ..., j_max
+    k = -order_max, ..., 0, ..., order_max
+    m = -order_max, ..., 0, ..., order_max
 
-    where
+    j >= |k| >= |m|
 
-    a_jkm = (4*j - 2) * u_jkm * w_jkm
-    b_jkm = v_jkm * w_jkm
+    where j_max is the maximum degree and order_max is the maximum order.
 
-    where 
-    u_jkm = [ 2j *(2j - 2) - (2k) (2m) ] - 2j (2j - 2) * 2 * sin^2(BETA / 2)    IF 0 < BETA < PI/2
-    u_jkm = -1.0 * (2k) (2m)                                                    IF BETA = PI/2
-    u_jkm = 2j (2j - 2) cos(BETA) - (2k) (2m)                                   IF PI/2 < BETA < PI
+    Overall we start by calculating the Wigner d-coefficients for the case when
+    j is starting at k, from d_k_km, d_k+1_km, d_k+2_km, ..., d_jmax_km. We only do 
+    this for the case j_max >= j >= order_max >= k >= m >= 0. We then fill in 
+    the rest of the table by symmetry (e.g. negative k and m value combinations).
 
-    v_jkm = 2j * SQRT [ (2j +2k - 2) (2j - 2k - 2) (2j +2m - 2) (2j - 2m - 2) ]
+    Steps:
+    1) Build the quarter table of seeds for recursion: shape (order_max + 1, order_max + 1)
 
-    w_jkm = 1 / [ (2j - 2) * SQRT [ (2j + 2k) (2j - 2k) (2j + 2m) (2j - 2m) ] ]
+    2) Recursively find d_k_km, d_k+1_km, d_k+2_km, ..., d_jmax_km
+
+    3) Fill in the rest of the table by symmetry: shape (degree_max + 1, order_max + 1, order_max + 1)
+
+    If the maximum degree exceeds around 500, then floating point 64 precision
+    becomes insufficient, and we use Toshio's X-number formulation to define a 
+    new float using a 64 bit float and an integer, as the new mantissa and exponent. 
+    He originally used a 32 bit integer, but I am using a 64 bit integer just in case.
+
+"""
+
+@torch.jit.script
+def trig_powers_array(
+        largest_power: int,
+        beta: Tensor,
+        device: torch.device,
+):
+    """
+
+    Calculate the powers of sin(beta/2) and cos(beta/2) from 0 up to the largest power.
+    This is done with X-numbers to avoid underflow.
+
+    Args:
+        largest_power: The largest power to calculate.
+        beta: The angle to calculate the powers for.
 
     Returns:
-        d_lkm: Wigner d-function
-
-    
-    For recurrence relation, we require seed values d_kkm and d_(k + 1)km
-
-    There are taken from equations (17-27) of the same paper...
-
-    d_kkm = c_(k + m) * s_(k - m) * e_(km) and d_(k + 1)km = a_km * d_kkm
-
-    where
-
-    c_n = cos(BETA / 2)^n
-    c_0 = 1 AND c_1 = cos(BETA / 2) AND c_n = c_(n - 1) * c_1
-
-    s_n = sin(BETA / 2)^n
-    s_0 = 1 AND s_1 = sin(BETA / 2) AND s_n = s_(n - 1) * s_1
-
-    e_(km) = SQRT[ (2k)! / ((k+m)!(k-m)!) ] where m <= k !!! need recursive alternative
-    e_mm = 1 AND e_Lm = 2 * SQRT[ (2L * (2L - 1)) / ((2L + 2m)(2L - 2m)) ] * e_(L - 1)m
-
-    a_km = SQRT[2 * (2k + 1) / ((2k + 2m + 2) (2k - 2m + 2)) ] * u_km
-
-    where
-
-    u_km = (2k - 2m - 2) - (2k - 2) * tc    IF 0 < BETA < PI/2
-    u_km = -(2m)                            IF BETA = PI/2
-    u_km = (2k - 2) * t - (2m)              IF PI/2 < BETA < PI
-
-    when BETA is PI/2, we have a simplification of prefactor c_(k + m) * s_(k - m)
-
-    f_k = c_(k+m) * s_(k-m) = 2**(-k)                   IF k values are integers
-    f_k = c_(k+m) * s_(k-m) = SQRT(2) 2**(-k - 1/2)     IF k values are half-integers
-
-    f_0 = 1 AND f_L = 0.5 * f_(L - 1)                   IF L is integer
-    f_0 = 0.5 * SQRT(2) AND f_L = 0.5 * f_(L - 1)       IF L is half-integer
-
-
-    **************************************************************
-    **************************************************************
-
-    Only using integer values for k and m, so I will rewrite 
-    according to Will Lenthe's code...
-
-    Some of the formulae do not simply convert 2j to j etc.
-
-    **************************************************************
-    **************************************************************
-
-    a_jkm = (2j - 1) * u_jkm * w_jkm
-    b_jkm = v_jkm * w_jkm
-
-    where
-
-    u_jkm =  j * (j - 1) - k * m  - j * (j - 1) * t_c    IF 0 < BETA < PI/2
-    u_jkm =  -k * m                                      IF BETA = PI/2
-    u_jkm =  j * (j - 1) * t - k * m                     IF PI/2 < BETA < PI
-
-    v_jkm = j * SQRT [ (j + k - 1) (j - k - 1) (j + m - 1) (j - m - 1) ]
-
-    w_jkm = 1 / [ (j - 1) * SQRT [ (j + k) (j - k) (j + m) (j - m) ] ]
-
-    And the seed values are provided by:
-
-    d_kkm = c_(k + m) * s_(k - m) * e_(km) and d_(k + 1)km = a_km * d_kkm
-
-    where
-
-    c_n = cos(BETA / 2)^n
-    c_0 = 1 AND c_1 = cos(BETA / 2) AND c_n = c_(n - 1) * c_1
-
-    s_n = sin(BETA / 2)^n
-    s_0 = 1 AND s_1 = sin(BETA / 2) AND s_n = s_(n - 1) * s_1
-
-    e_mm = 1 AND e_Lm = 2 * SQRT[ (L * (2L - 1)) / ((L + m)(L - m)) ] * e_(L - 1)m for L = (m+1), (m+2), ..., k
-
-    a_km = SQRT[ (2k + 1) / ((k + m + 1) (k - m + 1)) ] * u_km
-
-
-    where
-
-    u_km = (k - m + 1) - (k + 1) * tc    IF 0 < BETA < PI/2
-    u_km = -m                            IF BETA = PI/2
-    u_km = (k + 1) * t - m               IF PI/2 < BETA < PI
-
-    
-"""
-
-from extended_precision import x2f, xlsum2, x_norm
-
-@torch.jit.script
-def u_jkm(j: Tensor,
-          k: Tensor,
-          m: Tensor,
-          beta: Tensor,
-          tc: Tensor,
-          t: Tensor,
-) -> Tensor:
-    """
-    Calculate u_jkm according to the following formula:
-
-    u_jkm =  j * (j - 1) - k * m  - j * (j - 1) * t_c    IF 0 < BETA < PI/2
-    u_jkm =  -k * m                                      IF BETA = PI/2
-    u_jkm =  j * (j - 1) * t - k * m                     IF PI/2 < BETA < PI
+        cos_powers_x: mantissa of cosine(beta/2)^n for n from 0 to largest_power: torch.float64
+        cos_powers_x_i: exponent of cosine(beta/2)^n for n from 0 to largest_power: torch.int32
+        sin_powers_x: mantissa of sine(beta/2)^n for n from 0 to largest_power: torch.float64
+        sin_powers_x_i: exponent of sine(beta/2)^n for n from 0 to largest_power: torch.int32
 
     """
-    u_jkm = torch.where((0.0 < beta) & (beta < np.pi / 2.0), j * (j - 1.0) - k * m - j * (j - 1.0) * tc, \
-        torch.where(beta == np.pi / 2.0, -k * m, j * (j - 1.0) * t - k * m))
-    return u_jkm
 
 
-@torch.jit.script
-def v_jkm(j: Tensor,
-          k: Tensor,
-          m: Tensor,
-) -> Tensor:
-    """
-    Calculate v_jkm according to the following formula:
+    cos_powers_x = torch.ones(largest_power + 1, dtype=torch.float64, device=device)
+    sin_powers_x = torch.ones(largest_power + 1, dtype=torch.float64, device=device)
+    cos_powers_x_i = torch.zeros(largest_power + 1, dtype=torch.int32, device=device)
+    sin_powers_x_i = torch.zeros(largest_power + 1, dtype=torch.int32, device=device)
 
-    v_jkm = j * SQRT [ (j + k - 1) (j - k - 1) (j + m - 1) (j - m - 1) ]
+    ch = torch.cos(beta / 2.0)
+    sh = torch.sin(beta / 2.0)
 
-    """
-    return j * torch.sqrt((j + k - 1.0) * (j - k - 1.0) * (j + m - 1.0) * (j - m - 1.0))
+    cn = torch.ones(1, dtype=torch.float64, device=device)
+    icn = torch.zeros(1, dtype=torch.int32, device=device)
+    sn = torch.ones(1, dtype=torch.float64, device=device)
+    isn = torch.zeros(1, dtype=torch.int32, device=device)
 
-
-@torch.jit.script
-def w_jkm(j: Tensor,
-          k: Tensor,
-          m: Tensor,
-) -> Tensor:
-    """
-    Calculate w_jkm according to the following formula:
-
-    w_jkm = 1 / [ (j - 1) * SQRT [ (j + k) (j - k) (j + m) (j - m) ] ]
-
-    """
-    return 1.0 / ((j - 1.0) * torch.sqrt((j + k) * (j - k) * (j + m) * (j - m)))
-
-
-
-
-"""
-
-Implement Toshio's F90 code:
-
-Table 4: Double precision X-number Fortran subroutine to return Wigner’s d-functions, d( j)
-km(β).
-
-This is an adaptation of the X-number formulation to wdvc listed in Table 3. This time, the input
-double precision seed value dkkm is replaced with its X-number mantissa and exponent, xdkkm
-and idkkm. Also, some of the working integer variables are declared as 64 bit integers in order to
-avoid the overflow in their multiplications.
-
-subroutine xwdvc(jmax2,k2,m2,tc,xdkkm,idkkm,dkm)
-real*8 tc,xdkkm,dkm(0:*),xd0,x2f,a,xd1,w,b,xd2
-integer jmax2,k2,m2,idkkm,id0,id1,id2
-integer*8 m2k2,j2,j2j22,j2pk2,j2mk2,j2pm2,j2mm2
-xd0=xdkkm; id0=idkkm; dkm(k2/2)=x2f(xd0,id0); if(jmax2.le.k2) return
-m2k2=int8(m2)*int8(k2); j2=k2+2; j2mm2=j2-m2
-a=sqrt(dble(j2-1)/dble((j2+m2)*(j2mm2)))*(dble(j2mm2)-dble(j2)*tc)
-xd1=xd0*a; id1=id0; call xnorm(xd1,id1); dkm(j2/2)=x2f(xd1,id1)
-do j2=k2+4,jmax2,2
-    j22=j2-2; j2j22=j2*j22
-    j2pk2=j2+k2; j2mk2=j2-k2; j2pm2=j2+m2; j2mm2=j2-m2
-    w=1.d0/(dble(j22)*sqrt(dble(j2pk2*j2mk2)*dble(j2pm2*j2mm2)))
-    b=w*dble(j2)*sqrt(dble((j2pk2-2)*(j2mk2-2))*dble((j2pm2-2)*(j2mm2-2)))
-    a=w*dble(j2+j22)*(dble(j2j22-m2k2)-dble(j2j22)*tc)
-    call xlsum2(a,xd1,-b,xd0,xd2,id1,id0,id2)
-    dkm(j2/2)=x2f(xd2,id2); xd0=xd1; id0=id1; xd1=xd2; id1=id2
-enddo
-return; end
-
-"""
-
-@torch.jit.script
-def xwdvc(jmax2: Tensor,
-          k2: Tensor,
-          m2: Tensor,
-          tc: Tensor,
-          xd0: Tensor,
-          id0: Tensor,
-) -> Tensor:
-    dkm = torch.zeros(int(jmax2 - k2) // 2 + 1, dtype=torch.float64)
-    dkm[0] = x2f(xd0, id0)[0]
-    if jmax2 <= k2:
-        return dkm
-    
-    m2k2 = m2 * k2
-    j2 = k2 + 2
-    j2mm2 = j2 - m2
-    a = ((j2 - 1).double() / ((j2 + m2) * j2mm2).double())**0.5 * (j2mm2.double() - j2.double() * tc)
-    xd1 = xd0 * a
-    id1 = id0
-    xd1, id1 = x_norm(xd1, id1)
-    dkm[1] = x2f(xd1, id1)[0]
-    index = 2
-    for j2 in torch.arange(int(k2 + 4), int(jmax2) + 2, dtype=torch.int64, step=2):
-        j22 = j2 - 2
-        j2j22 = j2 * j22
-        j2pk2 = j2 + k2
-        j2mk2 = j2 - k2
-        j2pm2 = j2 + m2
-        j2mm2 = j2 - m2
-        # w=1.d0/(dble(j22)*sqrt(dble(j2pk2*j2mk2)*dble(j2pm2*j2mm2)))
-        w = 1.0 / (j22.double() * ((j2pk2 * j2mk2).double() * (j2pm2 * j2mm2).double())**0.5)
-        # b=w*dble(j2)*sqrt(dble((j2pk2-2)*(j2mk2-2))*dble((j2pm2-2)*(j2mm2-2)))
-        b = w * j2.double() * (((j2pk2 - 2) * (j2mk2 - 2)).double() * ((j2pm2 - 2) * (j2mm2 - 2)).double())**0.5
-        # a=w*dble(j2+j22)*(dble(j2j22-m2k2)-dble(j2j22)*tc)
-        a = w * (j2 + j22).double() * ((j2j22 - m2k2).double() - j2j22.double() * tc)
-        # d_n is a * d_n-1 - b * d_n-2
-        # d_n-2 is xd0, id0 and d_n-1 is xd1, id1 so it is easy to swap a and b here
-        xd2, id2 = xlsum2(-b, a, xd0, id0, xd1, id1)
-        dkm[index] = x2f(xd2, id2)[0]
-        xd0 = xd1
-        id0 = id1
-        xd1 = xd2
-        id1 = id2
-        index += 1
-
-    return dkm
-
-
-"""
-
-Now we implement the logic for seed generation and print out the results 
-using his example code ported from F90 as inspiration. We will make β and J
-a input parameters...
-
-
-Table 5: Test driver of xwdvc. It print outs the values of Wigner's d-functions for all the de-
-gree/orders satisfying the condition, 0 ≤ m ≤ k ≤ j ≤ J, when the case J = 9/2 and β = π/4.
-program prtxwdc
-real*8 PI,beta,betah,ch,sh,tc,cn,sn,fm,fk,xekm,f,xdkkm,fj
-integer JX,JX2,jmax2,jg,j0,icn,isn,n,m2,k2,kpm,kmm,iekm,idkkm
-parameter (JX=16384,JX2=JX*2)
-real*8 dkm(0:JX),xc(0:JX2),xs(0:JX); integer ic(0:JX2),is(0:JX)
-PI=atan(1.d0)*4.d0; jmax2=9; beta=PI*0.25d0; jg=jmax2/2; j0=jmax2-jg*2
-betah=beta*0.5d0; ch=cos(betah); sh=sin(betah); tc=2.d0*sh*sh
-cn=1.d0; icn=0; sn=1.d0; isn=0; xc(0)=cn; ic(0)=icn; xs(0)=sn; is(0)=isn
-do n=1,jmax2
-    cn=ch*cn; call xnorm(cn,icn); xc(n)=cn; ic(n)=icn
-enddo
-do n=1,jg
-    sn=sh*sn; call xnorm(sn,isn); xs(n)=sn; is(n)=isn
-enddo
-do m2=j0,jmax2,2
-    fm=dble(m2)*0.5d0
-    do k2=m2,jmax2,2
-        fk=dble(k2)*0.5d0; kpm=(k2+m2)/2; kmm=(k2-m2)/2
-        if(k2.eq.m2) then
-            xekm=1.d0; iekm=0
-        else
-            f=dble(k2*(k2-1))/dble(kpm*kmm)
-            xekm=xekm*sqrt(f); call xnorm(xekm,iekm)
-        endif
-        xdkkm=xc(kpm)*xs(kmm); idkkm=ic(kpm)+is(kmm)
-        call xnorm(xdkkm,idkkm)
-        xdkkm=xdkkm*xekm; idkkm=idkkm+iekm
-        call xnorm(xdkkm,idkkm)
-        call xwdvc(jmax2,k2,m2,tc,xdkkm,idkkm,dkm)
-        do j2=k2,jmax2,2
-            fj=dble(j2)*0.5d0
-            write(*,”(0p3f10.1,1pe25.15)”) fj,fk,fm,dkm(j2/2)
-        enddo
-    enddo
-enddo
-end program prtxwdc
-
-"""
-
-@torch.jit.script
-def xwdvc_driver(jmax2: Tensor,
-                 beta: Tensor,
-) -> None:
-    """
-    This is the driver for the xwdvc function. It will print out the values of Wigner's d-functions 
-    for all the degree/orders satisfying the condition, 0 ≤ m ≤ k ≤ j ≤ J, given J and β.
-
-    """
-    # keep everything as tensors and use int() to get the values for range if needed
-    JX = 16384
-    JX2 = JX * 2
-    jg = jmax2 // 2
-    j0 = jmax2 - jg * 2
-    betah = beta * 0.5
-    ch = torch.cos(betah)
-    sh = torch.sin(betah)
-    tc = 2.0 * sh * sh
-    xc = torch.ones(JX2, dtype=torch.float64)
-    i_c = torch.zeros(JX2, dtype=torch.int64)
-    xs = torch.ones(JX, dtype=torch.float64)
-    i_s = torch.zeros(JX, dtype=torch.int64)
-
-    cn = torch.ones(1, dtype=torch.float64)
-    icn = torch.zeros(1, dtype=torch.int64)
-
-    for n in range(1, int(jmax2)):
+    for n in range(1, largest_power + 1):
+        # cosine calculation
         cn = ch * cn
         cn, icn = x_norm(cn, icn)
-        xc[n] = cn[0]
-        i_c[n] = icn[0]
+        cos_powers_x[n] = cn[0]
+        cos_powers_x_i[n] = icn[0]
 
-    sn = torch.ones(1, dtype=torch.float64)
-    isn = torch.zeros(1, dtype=torch.int64)
-
-    for n in range(1, int(jg)):
+        # sine calculation
         sn = sh * sn
         sn, isn = x_norm(sn, isn)
-        xs[n] = sn[0]
-        i_s[n] = isn[0]
+        sin_powers_x[n] = sn[0]
+        sin_powers_x_i[n] = isn[0]
 
-    xekm = torch.ones(1, dtype=torch.float64)
-    iekm = torch.zeros(1, dtype=torch.int64)
 
-    for m2 in torch.arange(int(j0), int(jmax2) + 2, step=2, dtype=torch.int64):
-        fm = m2.double() * 0.5
-        for k2 in torch.arange(int(m2), int(jmax2) + 2, step=2, dtype=torch.int64):
-            fk = k2.double() * 0.5
+    return cos_powers_x, cos_powers_x_i, sin_powers_x, sin_powers_x_i
+        
+
+@torch.jit.script
+def build_km_seed_table(
+        order_max: int,
+        beta: Tensor,
+        device: torch.device,
+):
+    """
+
+    Build the recursion seed table for the Wigner d-coefficients for the case when
+    j, k, and m are all non-negative and k <= j and m <= k.
+
+    Args:
+        order_max: The maximum order to calculate d_jkm for.
+        beta: The angle to calculate the d_jkm for.
+    
+
+    """
+
+    output_shape = (order_max + 1, order_max + 1)
+
+    output_dk_km = torch.empty(output_shape, dtype=torch.float64, device=device)
+    output_dk_km_i = torch.empty(output_shape, dtype=torch.int32, device=device)
+
+    output_d_kp1_km = torch.empty(output_shape, dtype=torch.float64, device=device)
+    output_d_kp1_km_i = torch.empty(output_shape, dtype=torch.int32, device=device)
+
+    # start by calculating a table of sine(beta/2)^n and cosine(beta/2)^n
+    cos_powers_x, cos_powers_x_i, sin_powers_x, sin_powers_x_i = trig_powers_array(
+        largest_power= (order_max + 1) * (order_max + 1),
+        beta=beta,
+        device=device,
+    )
+
+    e_km_x = torch.ones(1, dtype=torch.float64, device=device)
+    e_km_x_i = torch.zeros(1, dtype=torch.int32, device=device)
+
+    for m2 in torch.arange(0, 2 * order_max + 2, step=2, dtype=torch.int32, device=device):
+        e_km_x = torch.ones(1, dtype=torch.float64)
+        e_km_x_i = torch.zeros(1, dtype=torch.int32)
+        for k2 in torch.arange(int(m2), 2 * order_max + 2, step=2, dtype=torch.int32, device=device):
             kpm = (k2 + m2) // 2
             kmm = (k2 - m2) // 2
-            if k2 == m2:
-                xekm = torch.ones(1, dtype=torch.float64)
-                iekm = torch.zeros(1, dtype=torch.int64)
+            if m2 == k2:
+                e_km_x = torch.ones(1, dtype=torch.float64, device=device)
+                e_km_x_i = torch.zeros(1, dtype=torch.int32, device=device)
             else:
                 f = (k2.double() * (k2.double() - 1)) / (kpm.double() * kmm.double())
-                xekm = xekm * f**0.5
-                xekm, iekm = x_norm(xekm, iekm)
-            xdkkm = xc[kpm] * xs[kmm]
-            idkkm = i_c[kpm] + i_s[kmm]
-            xdkkm, idkkm = x_norm(xdkkm, idkkm)
-            xdkkm = xdkkm * xekm
-            idkkm = idkkm + iekm
-            xdkkm, idkkm = x_norm(xdkkm, idkkm)
-            dkm = xwdvc(jmax2, k2, m2, tc, xdkkm, idkkm)
-            index = 0
-            for j2 in torch.arange(int(k2), int(jmax2) + 2, step=2, dtype=torch.int64):
-                fj = j2.double() * 0.5
-                # print(f"fj: {fj.item()}, fk: {fk.item()}, fm: {fm.item()}, dkm: {dkm[j2 // 2].item()} kpm: {kpm.item()}, kmm: {kmm.item()}, xc[kpm]: {xc[kpm].item()}, xs[kmm]: {xs[kmm].item()}, xdkkm: {xdkkm.item()}, idkkm: {idkkm.item()}, xekm: {xekm.item()}, iekm: {iekm.item()}")
-                print(f"fj: {fj.item()}, fk: {fk.item()}, fm: {fm.item()}, dkm: {dkm[index].item()} item number {index + 1} out  of {dkm.shape[0]}")
-                index += 1
+                e_km_x = e_km_x * f**0.5
+                e_km_x, e_km_x_i = x_norm(e_km_x, e_km_x_i)
+            
+            # start by multiplying by the cosine power and sine power
+            dk_km = cos_powers_x[kpm] * sin_powers_x[kmm]
+            dk_km_i = cos_powers_x_i[kpm] + sin_powers_x_i[kmm]
+            dk_km, dk_km_i = x_norm(dk_km, dk_km_i)
 
-# test out the functions
-xwdvc_driver(
-    jmax2=torch.tensor([10,], dtype=torch.int64),
-    beta=torch.tensor([torch.pi * 7117.0 / 16384.0,], dtype=torch.float64),
-)
+            # multiply by the e_km term
+            dk_km = dk_km * e_km_x
+            dk_km_i = dk_km_i + e_km_x_i
+            dk_km, dk_km_i = x_norm(dk_km, dk_km_i)
+
+            # print(f'    dk_km for k = {k2.item() // 2}, m = {m2.item() // 2}: {dk_km.item()}')
+            
+            # add to the table
+            output_dk_km[k2 // 2, m2 // 2] = dk_km[0]
+            output_dk_km_i[k2 // 2, m2 // 2] = dk_km_i[0]
+
+            # do the first iteration outside of the loop because it is a special case
+            if 0 <= beta < (torch.pi / 2.0):
+                tc = 2.0 * torch.sin(beta / 2.0) ** 2
+                u_km = (k2 - m2 + 2).double() - (k2 + 2).double() * tc
+            elif beta == (torch.pi / 2.0):
+                u_km = -1.0 * m2.double()
+            else:
+                u_km = (k2 + 2).double() * torch.cos(beta) - m2.double()
+
+            a_km = ((k2 + 1).double() / ((k2 + m2 + 2).double() * (k2 - m2 + 2).double()))**0.5 * u_km
+
+            # print(f'      a_km for k = {k2.item() // 2}, m = {m2.item() // 2}: {a_km.item()}')
+
+            # multiply the first seed term by a_km and turn X-number into float
+            d_kp1_km = dk_km * a_km
+            d_kp1_km_i = dk_km_i
+            d_kp1_km, d_kp1_km_i = x_norm(d_kp1_km, d_kp1_km_i)
+
+            # print(f'  d_kp1_km for k = {k2.item() // 2}, m = {m2.item() // 2}: {d_kp1_km.item()}')
+
+            # add to the table
+            output_d_kp1_km[k2 // 2, m2 // 2] = d_kp1_km[0]
+            output_d_kp1_km_i[k2 // 2, m2 // 2] = d_kp1_km_i[0]
+
+    return output_dk_km, output_dk_km_i, output_d_kp1_km, output_d_kp1_km_i
+
+
+@torch.jit.script
+def build_a_b_jkm_volume(
+    degree_max: int,
+    order_max: int,
+    beta: Tensor,
+    device: torch.device,
+) -> Tuple[Tensor, Tensor]:
+    """
+
+    Build the volume of the Wigner d-coefficient table for the case when
+    degree_max >= j >= order_max >= k >= m >= 0.
+
+    Args:
+        degree_max: The maximum degree to calculate d_jkm for.
+        order_max: The maximum order to calculate d_jkm for.
+        beta: The angle to calculate the d_jkm for.
+
+    Returns:
+        a_volume: The a coefficients for all j, k, m: shape (degree_max + 1, order_max + 1, order_max + 1)
+        b_volume: The b coefficients for all j, k, m: shape (degree_max + 1, order_max + 1, order_max + 1)
+
+    """
+
+    # make volumes for a and b coefficients for all j, k, m
+    output_shape = (degree_max + 1, order_max + 1, order_max + 1)
+    a_volume = torch.zeros(output_shape, dtype=torch.float64, device=device)
+    b_volume = torch.zeros(output_shape, dtype=torch.float64, device=device)
+
+    jkm = torch.stack(torch.meshgrid(
+        torch.arange(0, degree_max + 1, dtype=torch.int32, device=device),
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        indexing='ij'
+    ), dim=-1).reshape(-1, 3)
+
+    j, k, m = torch.unbind(jkm, dim=-1)
+
+    valid_mask_flat = ((j >= k + 2) & (k >= m))
+    valid_mask = valid_mask_flat.reshape(int(degree_max + 1), int(order_max + 1), int(order_max + 1))
+
+    j = j[valid_mask_flat]
+    k = k[valid_mask_flat]
+    m = m[valid_mask_flat]
+
+    j2 = 2 * j
+    k2 = 2 * k
+    m2 = 2 * m
+
+    v_jkm = j2 * ((j2 + k2 -2).double() * (j2 - k2 - 2).double() * (j2 + m2 - 2).double() * (j2 - m2 - 2).double())**0.5
+    w_jkm = 1.0 / ((j2 - 2).double() * ((j2 + k2).double() * (j2 - k2).double() * (j2 + m2).double() * (j2 - m2).double())**0.5)
+
+    if 0 <= beta < (torch.pi / 2.0):
+        tc = 2.0 * torch.sin(beta / 2.0) ** 2
+        j2_times_j2m2 = (j2 * (j2 - 2)).double()
+        u_jkm = (j2_times_j2m2 - (m2 * k2).double()) - j2_times_j2m2 * tc
+    elif beta == (torch.pi / 2.0):
+        u_jkm = -1.0 * (k2 * m2).double()
+    else:
+        t = torch.cos(beta)
+        j2_times_j2m2 = (j2 * (j2 - 2)).double()
+        u_jkm = j2_times_j2m2 * t - (m2 * k2).double()
+
+    a_volume[valid_mask] = (2.0 * j2 - 2.0).double() * u_jkm * w_jkm
+    b_volume[valid_mask] = v_jkm * w_jkm
+
+    return a_volume, b_volume
+
+
+@torch.jit.script
+def recurse_km_table_seed_table(
+        d_k_km_x: Tensor,
+        d_k_km_x_i: Tensor,
+        d_kp1_km_x: Tensor,
+        d_kp1_km_x_i: Tensor,
+        a_jkm_volume: Tensor,
+        b_jkm_volume: Tensor,
+        degree_max: int,
+        device: torch.device,
+):
+    """
+
+    Recursively calculate the Wigner d-coefficients for a given seed value of k and m,
+    for all j values from k to j_max.
+
+    Args:
+        dkkm_x: mantissa of d_kkm
+        dkkm_x_i: exponent of d_kkm
+        j2_max: twice the maximum degree
+        k2: twice the order
+        m2: twice the order
+        beta: angle in radians 
+
+    Returns:
+        output: float64 tensor for d_k_km, d_k+1_km, ..., d_jmax_km: shape (j_max - k + 1)
+
+    """
+
+    order_max = d_k_km_x.shape[0] - 1
+
+    # make volumes for a and b coefficients for all j, k, m
+    d_jkm_volume_x = torch.full((degree_max + 1, order_max + 1, order_max + 1), dtype=torch.float64, fill_value=torch.inf, device=device)
+    d_jkm_volume_x_i = torch.full((degree_max + 1, order_max + 1, order_max + 1), dtype=torch.int32, fill_value=0, device=device)
+
+    jkm = torch.stack(torch.meshgrid(
+        torch.arange(0, degree_max + 1, dtype=torch.int32, device=device),
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        indexing='ij'
+    ), dim=-1).reshape(-1, 3)
+    j_3D, k_3D, m_3D = torch.unbind(jkm, dim=-1)
+
+    km = torch.stack(torch.meshgrid(
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        torch.arange(0, order_max + 1, dtype=torch.int32, device=device),
+        indexing='ij'
+    ), dim=-1).reshape(-1, 2)
+
+    k_2D, m_2D = torch.unbind(km, dim=-1)
+
+    first_seed_mask_3D = ((j_3D == k_3D) & (k_3D >= m_3D)).reshape(degree_max + 1, order_max + 1, order_max + 1)
+    first_seed_mask_2D = (k_2D >= m_2D).reshape(order_max + 1, order_max + 1)
+
+    d_jkm_volume_x[first_seed_mask_3D] = d_k_km_x[first_seed_mask_2D].view(-1)
+    d_jkm_volume_x_i[first_seed_mask_3D] = d_k_km_x_i[first_seed_mask_2D].view(-1)
+
+    second_seed_mask_3D = ((j_3D == (k_3D + 1)) & (k_3D >= m_3D) & ((k_3D + 1) <= degree_max)).reshape(degree_max + 1, order_max + 1, order_max + 1)
+    second_seed_mask_2D = ((k_2D >= m_2D) & ((k_2D + 1) <= degree_max)).reshape(order_max + 1, order_max + 1)
+
+    d_jkm_volume_x[second_seed_mask_3D] = d_kp1_km_x[second_seed_mask_2D].view(-1)
+    d_jkm_volume_x_i[second_seed_mask_3D] = d_kp1_km_x_i[second_seed_mask_2D].view(-1)
+
+    for j in torch.arange(2, degree_max + 1, dtype=torch.int32):
+
+        valid_indices_mask = ((j >= (k_2D + 2)) & (k_2D >= m_2D)).reshape(order_max + 1, order_max + 1)
+
+        b = b_jkm_volume[j, valid_indices_mask]
+        a = a_jkm_volume[j, valid_indices_mask]
+
+        if valid_indices_mask.sum() == 0:
+            pass
+
+        d_2_terms_prior_x =d_jkm_volume_x[j - 2, valid_indices_mask]
+        d_2_terms_prior_x_i = d_jkm_volume_x_i[j - 2, valid_indices_mask]
+
+        d_1_term_prior_x = d_jkm_volume_x[j - 1, valid_indices_mask]
+        d_1_term_prior_x_i = d_jkm_volume_x_i[j - 1, valid_indices_mask]
+
+        d_j_km_x, d_j_km_x_i = xlsum2(-b, a, d_2_terms_prior_x, d_2_terms_prior_x_i, d_1_term_prior_x, d_1_term_prior_x_i)
+
+        d_jkm_volume_x[j, valid_indices_mask] = d_j_km_x
+        d_jkm_volume_x_i[j, valid_indices_mask] = d_j_km_x_i
+
+    d_jkm_volume = x2f(d_jkm_volume_x, d_jkm_volume_x_i)
+
+    return d_jkm_volume
+
+
+@torch.jit.script
+def build_jkm_volume(
+        degree_max: int,
+        order_max: int,
+        beta: Tensor,
+        device: torch.device,
+):
+    """
+
+    Build the volume of the Wigner d-coefficient table for the case when
+    degree_max >= j >= order_max >= k >= m >= 0.
+
+    Args:
+        degree_max: The maximum degree to calculate d_jkm for.
+        order_max: The maximum order to calculate d_jkm for.
+        beta: The angle to calculate the d_jkm for.
+
+    Returns:
+        d_jkm_volume: The Wigner d-coefficient quarter table: shape (degree_max + 1, order_max + 1, order_max + 1)
+
+    """
+
+    print(f'Building d_jkm_volume for degree_max = {degree_max}, order_max = {order_max}, beta = {beta.item()}')
+
+    # make volumes for a and b coefficients for all j, k, m
+    a_volume, b_volume = build_a_b_jkm_volume(
+        degree_max=degree_max,
+        order_max=order_max,
+        beta=beta,
+        device=device,
+    )
+
+    print(f'  a_volume: {a_volume.shape}')
+
+    # build the seed table for the recursion
+    dk_km, dk_km_i, dkp1_km, dkp1_km_i = build_km_seed_table(
+        order_max=order_max,
+        beta=beta,
+        device=device
+    )
+
+    print(f'  dk_km: {dk_km.shape}')
+
+    # recursively calculate the rest of the table
+    d_jkm_volume = recurse_km_table_seed_table(
+        d_k_km_x=dk_km,
+        d_k_km_x_i=dk_km_i,
+        d_kp1_km_x=dkp1_km,
+        d_kp1_km_x_i=dkp1_km_i,
+        a_jkm_volume=a_volume,
+        b_jkm_volume=b_volume,
+        degree_max=degree_max,
+        device=device,
+    )
+
+    return d_jkm_volume
+
+
+test_parameters = [
+    # (10, 10, 10, 0.000000000000000000000000000000, 0.25),
+    # (10, 10, 10, 0.000000000000000000000000000000, 0.25),
+    # (10, 10, 10, 0.000000000000000000000000000000, 0.25),
+    # (10, 10, 10, 0.000000000000000000000000000000, 0.25),
+    # (500, 450, 450, 0.000000000000000, 0.25),
+    (365, 102, 20, -4.23570250037880395095020243575390e-02, 8161.0 / 16384.0),
+    (294, 247, 188, -1.11943794723176255836019618855372e-01, 7417.0 / 16384.0),
+    # (3777, 1014, 690, 1.68450832524798173944840155878705e-03, 12233.0 / 16384.0),
+]
+
+for test_parameter in test_parameters:
+    j = test_parameter[0]
+    k = test_parameter[1]
+    m = test_parameter[2]
+    correct_value = test_parameter[3]
+    beta = torch.tensor([torch.pi * test_parameter[4],], dtype=torch.float64, device=torch.device('cpu'))
+    volume = build_jkm_volume(j, k, beta, torch.device('cpu'))
+    print(volume.shape)
+    print(volume[j, 0, 0])
+    d_value = volume[j, k, m]
+    print("Correct   : " + "{:.20f}".format(correct_value))
+    print("Computed  : " + "{:.20f}".format(d_value))
+    print("Difference: " + "{:.20f}".format(abs(d_value - correct_value)))
+    print(" ------------------- ")

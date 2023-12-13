@@ -32,7 +32,7 @@ def x_norm(x: Tensor,
     """
 
     # Constants
-    IND = torch.tensor(960, dtype=torch.int64)
+    IND = torch.tensor(960, dtype=torch.int32)
     BIG = torch.pow(2.0, IND.double())
     BIGI = torch.pow(2.0, -IND.double())
     BIGS = torch.pow(2.0, IND.double()/2.0)
@@ -78,21 +78,11 @@ def x2f(x: torch.Tensor,
     """
 
     # Constants
-    IND = torch.tensor(960, dtype=torch.int64)
+    IND = torch.tensor(960, dtype=torch.int32)
     BIG = 2.0**IND
     BIGI = 2.0**(-IND)
 
-    output = torch.empty_like(x)
-
-    for index in range(0, len(ix)):
-        if ix[index] == 0:
-            output[index] = x[index]
-        elif ix[index] < 0:
-            output[index] = x[index] * BIGI
-        else:
-            output[index] = x[index] * BIG
-    
-    return output
+    return torch.where(ix == 0, x, torch.where(ix < 0, x * BIGI, x * BIG))
 
 
 @torch.jit.script
@@ -131,7 +121,7 @@ def xlsum2(f: Tensor,
     """
 
     # Constants
-    IND = torch.tensor(960, dtype=torch.int64)
+    IND = torch.tensor(960, dtype=torch.int32)
     BIGI = 2.0**(-IND)
 
     id = ix - iy
@@ -144,7 +134,7 @@ def xlsum2(f: Tensor,
 # # test out the functions
 # x = torch.tensor([2.0,], dtype=torch.float64)
 # print(f"x: {x}")
-# ix = torch.tensor([0,], dtype=torch.int64)
+# ix = torch.tensor([0,], dtype=torch.int32)
 # x, ix = x_norm(x, ix)
 # print(f"x-number mantissas: {x}")
 # print(f"x-number exponents: {ix}")

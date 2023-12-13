@@ -540,8 +540,6 @@ def d(j: torch.Tensor,
     # sn = s2**(k-m)
     sn = torch.pow(s2, k-m)
 
-    print("cn: " + str(cn))
-    print("sn: " + str(sn))
 
     d_kkm = cn * sn * e_km(k, m)
     if j == k:
@@ -621,78 +619,112 @@ def d(j: torch.Tensor,
     return d_ikm
 
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([365], dtype=torch.int64)
-k = torch.tensor([102], dtype=torch.int64)
-m = torch.tensor([20], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 8161.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct   : " + "{:.20f}".format(-4.23570250037880395095020243575390e-02))
-print("Computed  : " + "{:.20f}".format(d_value))
-print("Difference: " + "{:.20f}".format(abs(d_value + 4.23570250037880395095020243575390e-02)))
-print(" ------------------- ")
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([365], dtype=torch.int64)
+# k = torch.tensor([102], dtype=torch.int64)
+# m = torch.tensor([20], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 8161.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct   : " + "{:.20f}".format(-4.23570250037880395095020243575390e-02))
+# print("Computed  : " + "{:.20f}".format(d_value))
+# print("Difference: " + "{:.20f}".format(abs(d_value + 4.23570250037880395095020243575390e-02)))
+# print(" ------------------- ")
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([294], dtype=torch.int64)
-k = torch.tensor([247], dtype=torch.int64)
-m = torch.tensor([188], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 7417.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct   : " + "{:.20f}".format(-1.11943794723176255836019618855372e-01))
-print("Computed  : " + "{:.20f}".format(d_value))
-print("Difference: " + "{:.20f}".format(abs(d_value + 1.11943794723176255836019618855372e-01)))
-print(" ------------------- ")
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([294], dtype=torch.int64)
+# k = torch.tensor([247], dtype=torch.int64)
+# m = torch.tensor([188], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 7417.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct   : " + "{:.20f}".format(-1.11943794723176255836019618855372e-01))
+# print("Computed  : " + "{:.20f}".format(d_value))
+# print("Difference: " + "{:.20f}".format(abs(d_value + 1.11943794723176255836019618855372e-01)))
+# print(" ------------------- ")
 
-# test out computing the Wigner d coefficient 
-j = torch.tensor([3777], dtype=torch.int64)
-k = torch.tensor([1014], dtype=torch.int64)
-m = torch.tensor([690], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 12233.0 / 16384.0], dtype=torch.float64)
-beta = torch.tensor([beta], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct   : " + "{:.20f}".format(1.68450832524798173944840155878705e-03))
-print("Computed  : " + "{:.20f}".format(d_value))
-print("Difference: " + "{:.20f}".format(abs(d_value - 1.68450832524798173944840155878705e-03)))
-print(" ------------------- ")
+# # test out computing the Wigner d coefficient 
+# j = torch.tensor([3777], dtype=torch.int64)
+# k = torch.tensor([1014], dtype=torch.int64)
+# m = torch.tensor([690], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 12233.0 / 16384.0], dtype=torch.float64)
+# beta = torch.tensor([beta], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct   : " + "{:.20f}".format(1.68450832524798173944840155878705e-03))
+# print("Computed  : " + "{:.20f}".format(d_value))
+# print("Difference: " + "{:.20f}".format(abs(d_value - 1.68450832524798173944840155878705e-03)))
+# print(" ------------------- ")
 
 
-# print out value of d(1, 0, 0, t, False) for t = cos(7117.0 / 16384.0)
+# # print out value of d(1, 0, 0, t, False) for t = cos(7117.0 / 16384.0)
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([0], dtype=torch.int64)
-k = torch.tensor([0], dtype=torch.int64)
-m = torch.tensor([0], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct for 0 0 0 : " + "{:.20f}".format(d_value))
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([0], dtype=torch.int64)
+# k = torch.tensor([0], dtype=torch.int64)
+# m = torch.tensor([0], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct for 0 0 0 : " + "{:.20f}".format(d_value))
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([1], dtype=torch.int64)
-k = torch.tensor([0], dtype=torch.int64)
-m = torch.tensor([0], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct for 1 0 0 : " + "{:.20f}".format(d_value))
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([1], dtype=torch.int64)
+# k = torch.tensor([0], dtype=torch.int64)
+# m = torch.tensor([0], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct for 1 0 0 : " + "{:.20f}".format(d_value))
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([2], dtype=torch.int64)
-k = torch.tensor([0], dtype=torch.int64)
-m = torch.tensor([0], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct for 2 0 0 : " + "{:.20f}".format(d_value))
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([2], dtype=torch.int64)
+# k = torch.tensor([0], dtype=torch.int64)
+# m = torch.tensor([0], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct for 2 0 0 : " + "{:.20f}".format(d_value))
 
-# test out computing the Wigner d coefficient
-j = torch.tensor([5], dtype=torch.int64)
-k = torch.tensor([3], dtype=torch.int64)
-m = torch.tensor([1], dtype=torch.int64)
-beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
-t = torch.cos(beta)
-d_value = d(j, k, m, t, False).item()
-print("Correct  for 5 3 1: " + "{:.20f}".format(d_value))
+# # test out computing the Wigner d coefficient
+# j = torch.tensor([5], dtype=torch.int64)
+# k = torch.tensor([5], dtype=torch.int64)
+# m = torch.tensor([0], dtype=torch.int64)
+# beta = torch.tensor([torch.pi * 7117.0 / 16384.0], dtype=torch.float64)
+# t = torch.cos(beta)
+# d_value = d(j, k, m, t, False).item()
+# print("Correct  for 5 5 0: " + "{:.20f}".format(d_value))
+
+# for k in range(1):
+#     for m in range(1):
+#         for j in range(3):
+#             if abs(m) <= j and abs(k) <= j and abs(m) <= abs(k):
+#                 # doing equivalent of print(f"d({j}, {k}, {m}) = {wigner_d_naive_v3(j, k, m)(np.pi / 4.0)}")
+#                 j = torch.tensor([j], dtype=torch.int64)
+#                 k = torch.tensor([k], dtype=torch.int64)
+#                 m = torch.tensor([m], dtype=torch.int64)
+#                 beta = torch.tensor([torch.pi * 7417.0 / 16384.0,], dtype=torch.float64)
+#                 t = torch.cos(beta)
+#                 d_value = d(j, k, m, t, False)
+#                 print(f'd({j.item()}, {k.item()}, {m.item()}) = {d_value.item()}')
+
+
+test_parameters = [
+    # (400, 400, 400, 1.0, 0.0),
+    (365, 102, 20, -4.23570250037880395095020243575390e-02, 8161.0 / 16384.0),
+    (294, 247, 188, -1.11943794723176255836019618855372e-01, 7417.0 / 16384.0),
+]
+
+for test_parameter in test_parameters:
+    j = torch.tensor([test_parameter[0],], dtype=torch.int64)
+    k = torch.tensor([test_parameter[1],], dtype=torch.int64)
+    m = torch.tensor([test_parameter[2],], dtype=torch.int64)
+    correct_value = test_parameter[3]
+    beta = torch.tensor([torch.pi * test_parameter[4],], dtype=torch.float64)
+    t = torch.cos(beta)
+    d_value = d(j, k, m, t, False).item()
+    print("Correct   : " + "{:.20f}".format(correct_value))
+    print("Computed  : " + "{:.20f}".format(d_value))
+    print("Difference: " + "{:.20f}".format(abs(d_value - correct_value)))
+    print(" ------------------- ")
+    
