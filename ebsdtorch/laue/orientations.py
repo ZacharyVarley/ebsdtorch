@@ -29,6 +29,45 @@ ro: tan(w / 2)
 """
 
 # -------------------------------------------------------------------
+# -------------------------- sphere functions -----------------------
+# -------------------------------------------------------------------
+
+
+@torch.jit.script
+def theta_phi_to_xyz(theta: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
+    """
+    Convert spherical coordinates to cartesian coordinates.
+    :param theta: torch tensor of shape (n, ) containing the polar declination angles
+    :param phi: torch tensor of shape (n, ) containing the azimuthal angles
+    :return: torch tensor of shape (n, 3) containing the cartesian coordinates
+    """
+    return torch.stack(
+        (
+            torch.cos(theta) * torch.sin(phi),
+            torch.sin(theta) * torch.sin(phi),
+            torch.cos(phi),
+        ),
+        dim=1,
+    )
+
+
+@torch.jit.script
+def xyz_to_theta_phi(xyz: torch.Tensor) -> torch.Tensor:
+    """
+    Convert cartesian coordinates to latitude and longitude.
+    :param xyz: torch tensor of shape (n, 3) containing the cartesian coordinates
+    :return: torch tensor of shape (n, 2) containing the polar declination and azimuthal angles
+    """
+    return torch.stack(
+        (
+            torch.atan2(torch.norm(xyz[:, :2], dim=1), xyz[:, 2]),
+            torch.atan2(xyz[:, 1], xyz[:, 0]),
+        ),
+        dim=1,
+    )
+
+
+# -------------------------------------------------------------------
 # ------------------------ quaternion functions ---------------------
 # -------------------------------------------------------------------
 
@@ -151,8 +190,9 @@ def quaternion_apply(quaternion: torch.Tensor, point: torch.Tensor) -> torch.Ten
 
 
 @torch.jit.script
-def quaternion_rotate_sets_sphere(points_start: torch.Tensor,
-                                  points_finish) -> torch.Tensor:
+def quaternion_rotate_sets_sphere(
+    points_start: torch.Tensor, points_finish
+) -> torch.Tensor:
     """
     Determine the quaternions that rotate the points_start to the points_finish.
     All points are assumed to be on the unit sphere. The cross product is used
@@ -179,9 +219,13 @@ def quaternion_rotate_sets_sphere(points_start: torch.Tensor,
     # add tau to the angle if the cross product is negative
     angle[angle < 0] += 2 * torch.pi
     # set the output
-    out = torch.empty((points_start.shape[0], 4), dtype=points_start.dtype, device=points_start.device)
+    out = torch.empty(
+        (points_start.shape[0], 4), dtype=points_start.dtype, device=points_start.device
+    )
     out[valid, 0] = torch.cos(angle / 2)
-    out[valid, 1:] = torch.sin(angle / 2)[:, None] * (cross / torch.norm(cross, dim=-1, keepdim=True))
+    out[valid, 1:] = torch.sin(angle / 2)[:, None] * (
+        cross / torch.norm(cross, dim=-1, keepdim=True)
+    )
     out[~valid, 0] = 1
     out[~valid, 1:] = 0
     return out
@@ -205,6 +249,7 @@ def misorientation_angle(quaternion: torch.Tensor) -> torch.Tensor:
 # -------------------------------------------------------------------
 # ------------------------- octonion functions ----------------------
 # -------------------------------------------------------------------
+
 
 @torch.jit.script
 def octionion_standardize(octonions: torch.Tensor) -> torch.Tensor:
@@ -238,7 +283,7 @@ def octonion_raw_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     # Unbind octonions
     aw, ax, ay, az, al, am, an, ao = torch.unbind(a, -1)
     bw, bx, by, bz, bl, bm, bn, bo = torch.unbind(b, -1)
-    
+
     # Compute multiplication
     ow = aw * bw - ax * bx - ay * by - az * bz - al * bl - am * bm - an * bn - ao * bo
     ox = aw * bx + ax * bw + ay * bz - az * by + al * bo - am * bn + an * bm - ao * bl
@@ -307,6 +352,7 @@ def octonion_misorientation_angle(octonion: torch.Tensor) -> torch.Tensor:
 # ------------------------ conversion functions ---------------------
 # -------------------------------------------------------------------
 
+
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
     Returns torch.sqrt(torch.max(0, x))
@@ -370,7 +416,6 @@ def om2qu(matrix: torch.Tensor) -> torch.Tensor:
     best_indices = torch.argmax(q_abs, dim=-1)
 
     return quat_candidates[torch.arange(quat_candidates.shape[0]), best_indices]
-    
 
 
 @torch.jit.script
@@ -494,9 +539,6 @@ def ho2cu(ho: torch.Tensor) -> torch.Tensor:
     cu[mask_56] = torch.roll(cu[mask_56], shifts=1, dims=1)
 
     # Process based on conditions
-
-
-    
 
     # Roll back to the original pyramid order
     cu[mask_34] = torch.roll(cu[mask_34], shifts=1, dims=1)
@@ -1014,7 +1056,7 @@ def qu2zh(quaternions: torch.Tensor) -> torch.Tensor:
     Returns:
         6D rotation representation, of size (*, 6)
     """
-    
+
     return om2zh(qu2om(quaternions))
 
 

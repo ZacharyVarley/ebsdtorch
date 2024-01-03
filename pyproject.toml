@@ -6,8 +6,8 @@ authors = ["Zachary Varley <zvarley@andrew.cmu.edu>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
-torch = "^2.0.0"
+python = "^3.10"
+torch = "^2.1.0"
 
 
 [build-system]

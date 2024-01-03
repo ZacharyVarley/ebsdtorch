@@ -1,8 +1,10 @@
+from typing import Optional, Tuple
 import torch
+from torch import Tensor
 
 
 @torch.jit.script
-def square_lambert(pts: torch.Tensor) -> torch.Tensor:
+def square_lambert(pts: Tensor) -> Tensor:
     """
     Map unit sphere to (-1, 1) X (-1, 1) square via square lambert projection.
     :param pts: torch tensor of shape (..., 3) containing the points
@@ -55,7 +57,7 @@ def square_lambert(pts: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def inv_square_lambert(pts: torch.Tensor) -> torch.Tensor:
+def inv_square_lambert(pts: Tensor) -> Tensor:
     """
     Map (-1, 1) X (-1, 1) square to Northern hemisphere via inverse square lambert projection.
 
@@ -67,21 +69,37 @@ def inv_square_lambert(pts: torch.Tensor) -> torch.Tensor:
     # move points form [-1, 1] X [-1, 1] to [0, 1] X [0, 1]
     pi = torch.pi
 
-    a = pts[..., 0] * 1.25331413732 # sqrt(pi / 2)
-    b = pts[..., 1] * 1.25331413732 # sqrt(pi / 2)
+    a = pts[..., 0] * 1.25331413732  # sqrt(pi / 2)
+    b = pts[..., 1] * 1.25331413732  # sqrt(pi / 2)
 
     # mask for branch
     go = torch.abs(b) <= torch.abs(a)
 
     output = torch.empty((pts.shape[0], 3), dtype=pts.dtype, device=pts.device)
 
-    output[go, 0] = (2 * a[go] / pi) * torch.sqrt(pi - a[go]**2) * torch.cos((pi * b[go]) / (4 * a[go]))
-    output[go, 1] = (2 * a[go] / pi) * torch.sqrt(pi - a[go]**2) * torch.sin((pi * b[go]) / (4 * a[go]))
-    output[go, 2] = 1 - (2 * a[go]**2 / pi)
+    output[go, 0] = (
+        (2 * a[go] / pi)
+        * torch.sqrt(pi - a[go] ** 2)
+        * torch.cos((pi * b[go]) / (4 * a[go]))
+    )
+    output[go, 1] = (
+        (2 * a[go] / pi)
+        * torch.sqrt(pi - a[go] ** 2)
+        * torch.sin((pi * b[go]) / (4 * a[go]))
+    )
+    output[go, 2] = 1 - (2 * a[go] ** 2 / pi)
 
-    output[~go, 0] = (2 * b[~go] / pi) * torch.sqrt(pi - b[~go]**2) * torch.sin((pi * a[~go]) / (4 * b[~go]))
-    output[~go, 1] = (2 * b[~go] / pi) * torch.sqrt(pi - b[~go]**2) * torch.cos((pi * a[~go]) / (4 * b[~go]))
-    output[~go, 2] = 1 - (2 * b[~go]**2 / pi)
+    output[~go, 0] = (
+        (2 * b[~go] / pi)
+        * torch.sqrt(pi - b[~go] ** 2)
+        * torch.sin((pi * a[~go]) / (4 * b[~go]))
+    )
+    output[~go, 1] = (
+        (2 * b[~go] / pi)
+        * torch.sqrt(pi - b[~go] ** 2)
+        * torch.cos((pi * a[~go]) / (4 * b[~go]))
+    )
+    output[~go, 2] = 1 - (2 * b[~go] ** 2 / pi)
 
     return output
 
@@ -98,7 +116,7 @@ def inv_square_lambert(pts: torch.Tensor) -> torch.Tensor:
 
 
 # @torch.jit.script
-# def square_lambert_two(pts: torch.Tensor) -> torch.Tensor:
+# def square_lambert_two(pts: Tensor) -> Tensor:
 #     """
 #     Map points on the sphere to the unit square using the square lambert projection.
 #     :param pts: torch tensor of shape (n, 3) containing the points

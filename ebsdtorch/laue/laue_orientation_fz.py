@@ -1,6 +1,20 @@
 import torch
+from torch import Tensor
 
-from ebsdtorch.laue.orientations import quaternion_multiply, quaternion_real_of_prod, quaternion_apply
+"""
+
+This file implements functions for moving points on the 2-sphere and unit
+quaternions to the arbitrarily chosen unique set of points / orientations
+under the symmetry of one of the given Laue groups.
+
+"""
+
+from ebsdtorch.laue.orientations import (
+    quaternion_multiply,
+    quaternion_real_of_prod,
+    quaternion_apply,
+    xyz_to_theta_phi,
+)
 
 # sqrt(2) / 2 and sqrt(3) / 2
 R2 = 0.7071067811865475244008443621048490392848359376884740365883398689
@@ -148,10 +162,9 @@ LAUE_MULTS = [
     48,
 ]
 
+
 @torch.jit.script
-def _ori_to_so3_fz(
-    orientations: torch.Tensor, laue_group: torch.Tensor
-) -> torch.Tensor:
+def _ori_to_so3_fz(orientations: Tensor, laue_group: Tensor) -> Tensor:
     """
     :param misorientations: quaternions to move to fundamental zone of shape (..., 4)
     :param laue_group: laue group of quaternions to move to fundamental zone
@@ -179,7 +192,7 @@ def _ori_to_so3_fz(
 
 
 @torch.jit.script
-def _oris_are_in_so3_fz(orientations: torch.Tensor, laue_group: torch.Tensor) -> torch.Tensor:
+def _oris_are_in_so3_fz(orientations: Tensor, laue_group: Tensor) -> Tensor:
     """
     :param misorientations: quaternions to move to fundamental zone of shape (..., 4)
     :param laue_group: laue group of quaternions to move to fundamental zone
@@ -202,7 +215,7 @@ def _oris_are_in_so3_fz(orientations: torch.Tensor, laue_group: torch.Tensor) ->
     return (row_maximum_indices == 0).reshape(data_shape[:-1])
 
 
-def oris_are_in_so3_fz(orientations: torch.Tensor, laue_group: int) -> torch.Tensor:
+def oris_are_in_so3_fz(orientations: Tensor, laue_group: int) -> Tensor:
     """
     :param orientations: quaternions to move to fundamental zone of shape (..., 4)
     :param laue_group: laue group of quaternions to move to fundamental zone
@@ -218,7 +231,7 @@ def oris_are_in_so3_fz(orientations: torch.Tensor, laue_group: int) -> torch.Ten
     )
 
 
-def oris_to_so3_fz(quaternions: torch.Tensor, laue_group: int) -> torch.Tensor:
+def oris_to_so3_fz(quaternions: Tensor, laue_group: int) -> Tensor:
     """
     :param quaternions: quaternions to move to fundamental zone of shape (..., 4)
     :param laue_group: laue group of quaternions to move to fundamental zone
@@ -235,18 +248,18 @@ def oris_to_so3_fz(quaternions: torch.Tensor, laue_group: int) -> torch.Tensor:
 
 
 @torch.jit.script
-def _points_are_in_s2_fz(points: torch.Tensor, laue_id: int) -> torch.Tensor:
+def _points_are_in_s2_fz(points: Tensor, laue_id: int) -> Tensor:
     """
     :param points: points for filtering to fundamental zone of shape (N, 3)
     :param laue_id: laue group of points to move to fundamental zone
     :return: points in fundamental zone of shape (M, 3) where M <= N
     """
     # define some constants
-    PI_2 = torch.pi / 2
-    PI_3 = torch.pi / 3
-    PI_4 = torch.pi / 4
-    PI_6 = torch.pi / 6
-    PI_n23 = -2.0 * torch.pi / 3
+    PI_2 = torch.pi / 2.0
+    PI_3 = torch.pi / 3.0
+    PI_4 = torch.pi / 4.0
+    PI_6 = torch.pi / 6.0
+    PI_n23 = -2.0 * torch.pi / 3.0
 
     # set epsilon
     EPS = 1e-12
@@ -307,9 +320,7 @@ def _points_are_in_s2_fz(points: torch.Tensor, laue_id: int) -> torch.Tensor:
 
 
 @torch.jit.script
-def _points_to_s2_fz(
-    points: torch.Tensor, laue_group: torch.Tensor, laue_id: int
-) -> torch.Tensor:
+def _points_to_s2_fz(points: Tensor, laue_group: Tensor, laue_id: int) -> Tensor:
     """
     :param points: points to move to fundamental zone of shape (..., 3)
     :param laue_group: laue group of points to move to fundamental zone
@@ -335,9 +346,7 @@ def _points_to_s2_fz(
 
 
 @torch.jit.script
-def _eqiv_points_s2(
-    points: torch.Tensor, laue_group: torch.Tensor
-) -> torch.Tensor:
+def _eqiv_points_s2(points: Tensor, laue_group: Tensor) -> Tensor:
     """
     :param points: points to move to fundamental zone of shape (..., 3)
     :param laue_group: laue group of points to move to fundamental zone
@@ -357,10 +366,10 @@ def _eqiv_points_s2(
     # concatenate all of the points with their inverted coordinates
     equivalent_points = torch.cat([equivalent_points, -equivalent_points], dim=1)
 
-    return equivalent_points.reshape(data_shape[:-1], len(laue_group), 3)
+    return equivalent_points.reshape(data_shape[:-1] + (len(laue_group), 3))
 
 
-def eqiv_points_s2(points: torch.Tensor, laue_group: int) -> torch.Tensor:
+def eqiv_points_s2(points: Tensor, laue_group: int) -> Tensor:
     """
     :param points: points on the sphere to find equivalent points of shape (..., 3)
     :param laue_group: laue group of points to find equivalent points
@@ -376,7 +385,7 @@ def eqiv_points_s2(points: torch.Tensor, laue_group: int) -> torch.Tensor:
     )
 
 
-def points_to_s2_fz(points: torch.Tensor, laue_group: int) -> torch.Tensor:
+def points_to_s2_fz(points: Tensor, laue_group: int) -> Tensor:
     """
     :param points: points to move to fundamental zone of shape (..., 3)
     :param laue_group: laue group of points to move to fundamental zone
@@ -389,6 +398,82 @@ def points_to_s2_fz(points: torch.Tensor, laue_group: int) -> torch.Tensor:
     return _points_to_s2_fz(
         points,
         LAUE_GROUPS[laue_group - 1].to(points.dtype).to(points.device),
+        laue_group,
+    )
+
+
+# @torch.jit.script
+def _color_fz_orientations(
+    quaternions: Tensor, reference_direction: Tensor, laue_group: Tensor, laue_id: int
+) -> Tensor:
+    """
+
+    Return the coloring of each orientation.
+
+    """
+
+    reference_direction_moved = quaternion_apply(quaternions, reference_direction)
+
+    reference_direction_moved_fz = _points_to_s2_fz(
+        reference_direction_moved, laue_group, laue_id
+    )
+
+    theta_phi = xyz_to_theta_phi(reference_direction_moved_fz)  # INCORRECT!!!
+    theta_phi[:, 0] = theta_phi[:, 0] * 2.0 + 0.5
+
+    angle = torch.fmod(theta_phi[:, 0] / (2.0 * torch.pi), 1.0)
+
+    hsl = torch.stack((angle, torch.ones_like(angle), theta_phi[:, 1]), dim=-1)
+
+    l2 = hsl[..., 2] * 2.0
+    s2 = hsl[..., 1] * torch.where(l2 <= 1.0, l2, 2.0 - l2)
+    s2[torch.isnan(s2)] = 0.0
+    val = (l2 + s2) / 2.0
+
+    hsv = torch.stack((hsl[..., 0], s2, val), dim=-1)
+
+    h6_f = torch.floor(hsv[..., 0] * 6.0)
+    h6_byte = h6_f.byte()
+    f = hsv[..., 0] * 6.0 - h6_f
+    p = hsv[..., 2] * (1.0 - hsv[..., 1])
+    q = hsv[..., 2] * (1.0 - hsv[..., 1] * f)
+    t = hsv[..., 2] * (1.0 - hsv[..., 1] * (1.0 - f))
+
+    output = torch.zeros_like(hsv)
+
+    m0 = h6_byte == 0
+    m1 = h6_byte == 1
+    m2 = h6_byte == 2
+    m3 = h6_byte == 3
+    m4 = h6_byte == 4
+    m5 = h6_byte == 5
+
+    output[m0] = torch.stack((hsv[m0, 2], t[m0], p[m0]), dim=-1)
+    output[m1] = torch.stack((q[m1], hsv[m1, 2], p[m1]), dim=-1)
+    output[m2] = torch.stack((p[m2], hsv[m2, 2], t[m2]), dim=-1)
+    output[m3] = torch.stack((p[m3], q[m3], hsv[m3, 2]), dim=-1)
+    output[m4] = torch.stack((t[m4], p[m4], hsv[m4, 2]), dim=-1)
+    output[m5] = torch.stack((hsv[m5, 2], p[m5], q[m5]), dim=-1)
+
+    return (output * 255.0).byte()
+
+
+def color_fz_orientations(
+    quaternions: Tensor, reference_direction: Tensor, laue_group: int
+) -> Tensor:
+    """
+
+    Return the coloring of each orientation.
+
+    """
+    # assert LAUE_GROUP is an int between 1 and 11 inclusive
+    if not isinstance(laue_group, int) or laue_group < 1 or laue_group > 11:
+        raise ValueError(f"Laue group {laue_group} not laue number in [1, 11]")
+    # find all equivalent quaternions
+    return _color_fz_orientations(
+        quaternions,
+        reference_direction,
+        LAUE_GROUPS[laue_group - 1].to(quaternions.dtype).to(quaternions.device),
         laue_group,
     )
 

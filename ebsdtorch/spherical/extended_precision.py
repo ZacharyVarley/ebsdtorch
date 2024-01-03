@@ -2,14 +2,14 @@ from typing import Tuple
 import torch
 from torch import Tensor
 
+
 @torch.jit.script
-def x_norm(x: Tensor, 
-           i_x: Tensor) -> Tuple[Tensor, Tensor]:
+def x_norm(x: Tensor, i_x: Tensor) -> Tuple[Tensor, Tensor]:
     """
     x is a 64 bit floating point tensor of shape (..., ) and i_x is a 32 bit integer tensor of shape (..., )
 
     Returns normalized X-number as the mantissa and the exponent.
-    
+
     Done according to Toshio Fukushima's definition F90 code:
 
     Table 7 Fortran subroutine to normalize a weakly normalized X-number
@@ -27,7 +27,7 @@ def x_norm(x: Tensor,
     return; end
 
     The constants related with the normalization bounds, B^(1/2) and B^(-1/2),
-    are termed as BIGS and BIGSI, respectively 
+    are termed as BIGS and BIGSI, respectively
 
     """
 
@@ -35,8 +35,8 @@ def x_norm(x: Tensor,
     IND = torch.tensor(960, dtype=torch.int32)
     BIG = torch.pow(2.0, IND.double())
     BIGI = torch.pow(2.0, -IND.double())
-    BIGS = torch.pow(2.0, IND.double()/2.0)
-    BIGSI = torch.pow(2.0, -IND.double()/2.0)
+    BIGS = torch.pow(2.0, IND.double() / 2.0)
+    BIGSI = torch.pow(2.0, -IND.double() / 2.0)
 
     w = torch.abs(x)
     x = torch.where(w >= BIGS, x * BIGI, x)
@@ -48,8 +48,9 @@ def x_norm(x: Tensor,
 
 
 @torch.jit.script
-def x2f(x: torch.Tensor,
-        ix: torch.Tensor,
+def x2f(
+    x: torch.Tensor,
+    ix: torch.Tensor,
 ) -> torch.Tensor:
     """
 
@@ -74,24 +75,21 @@ def x2f(x: torch.Tensor,
     The radix B and its reciprocal B^(-1) are named BIG and BIGI in the
     program. An integer constant IND is the index of power of 2 to define
     the radix
-    
+
     """
 
     # Constants
     IND = torch.tensor(960, dtype=torch.int32)
     BIG = 2.0**IND
-    BIGI = 2.0**(-IND)
+    BIGI = 2.0 ** (-IND)
 
     return torch.where(ix == 0, x, torch.where(ix < 0, x * BIGI, x * BIG))
 
 
 @torch.jit.script
-def xlsum2(f: Tensor,
-           g: Tensor,
-           x: Tensor,
-           ix: Tensor,
-           y: Tensor,
-           iy: Tensor) -> Tuple[Tensor, Tensor]:
+def xlsum2(
+    f: Tensor, g: Tensor, x: Tensor, ix: Tensor, y: Tensor, iy: Tensor
+) -> Tuple[Tensor, Tensor]:
     """
     Return the linear combination of two X-numbers, X, and Y, with prefactors f and g.
 
@@ -122,14 +120,31 @@ def xlsum2(f: Tensor,
 
     # Constants
     IND = torch.tensor(960, dtype=torch.int32)
-    BIGI = 2.0**(-IND)
+    BIGI = 2.0 ** (-IND)
 
     id = ix - iy
-    z = torch.where(id == 0, f * x + g * y, torch.where(id == 1, f * x + g * y * BIGI, torch.where(id == -1, g * y + f * x * BIGI, torch.where(id > 1, f * x, g * y))))
-    iz = torch.where(id == 0, ix, torch.where(id == 1, ix, torch.where(id == -1, iy, torch.where(id > 1, ix, iy))))
+    z = torch.where(
+        id == 0,
+        f * x + g * y,
+        torch.where(
+            id == 1,
+            f * x + g * y * BIGI,
+            torch.where(
+                id == -1, g * y + f * x * BIGI, torch.where(id > 1, f * x, g * y)
+            ),
+        ),
+    )
+    iz = torch.where(
+        id == 0,
+        ix,
+        torch.where(
+            id == 1, ix, torch.where(id == -1, iy, torch.where(id > 1, ix, iy))
+        ),
+    )
     z, iz = x_norm(z, iz)
 
     return z, iz
+
 
 # # test out the functions
 # x = torch.tensor([2.0,], dtype=torch.float64)

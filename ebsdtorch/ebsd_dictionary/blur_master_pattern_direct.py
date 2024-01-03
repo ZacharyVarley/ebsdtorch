@@ -2,7 +2,10 @@ import torch
 import numpy as np
 from torch_harmonics.quadrature import legendre_gauss_weights
 from torch_harmonics import RealSHT, InverseRealSHT
-from ebsdtorch.geometries.interpolation import square_lambert, inv_square_lambert
+from ebsdtorch.patterns.square_hemisphere_bijection import (
+    square_lambert,
+    inv_square_lambert,
+)
 from ebsdtorch.laue.orientations import quaternion_apply, quaternion_rotate_sets_sphere
 from ebsdtorch.laue.sampling import (
     s2_fibonacci_lattice,

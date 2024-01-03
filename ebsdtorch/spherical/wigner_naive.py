@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.special import jv, legendre, sph_harm, jacobi
+
 try:
     from scipy.misc import factorial, comb
 except:
@@ -9,10 +10,7 @@ from math import pi
 from scipy.special import jacobi
 
 
-def wigner_d_naive_v3(l: int,
-                      m: int,
-                      n: int,
-                      approx_lim=10000000):
+def wigner_d_naive_v3(l: int, m: int, n: int, approx_lim=10000000):
     """
     Wigner "small d" matrix. (Euler z-y-z convention)
     example:
@@ -38,16 +36,18 @@ def wigner_d_naive_v3(l: int,
     """
 
     if (l < 0) or (abs(m) > l) or (abs(n) > l):
-        raise ValueError("wignerd(l = {0}, m = {1}, n = {2}) value error.".format(l, m, n) \
-            + " Valid range for parameters: l>=0, -l<=m,n<=l.")
+        raise ValueError(
+            "wignerd(l = {0}, m = {1}, n = {2}) value error.".format(l, m, n)
+            + " Valid range for parameters: l>=0, -l<=m,n<=l."
+        )
 
     jmn_terms = {
-        l + n : (m - n, m - n),
-        l - n : (n - m, 0.),
-        l + m : (n - m, 0.),
-        l - m : (m - n, m - n),
-        }
-    
+        l + n: (m - n, m - n),
+        l - n: (n - m, 0.0),
+        l + m: (n - m, 0.0),
+        l - m: (m - n, m - n),
+    }
+
     # jmn_terms = np.array(list(jmn_terms.items()), dtype=np.float64)
 
     k = min(jmn_terms)
@@ -59,29 +59,33 @@ def wigner_d_naive_v3(l: int,
     lmb = np.float128(lmb)
 
     b = np.int64(2 * l - 2 * k - a)
-    b_float = np.float64(2. * l - 2. * k - a)
+    b_float = np.float64(2.0 * l - 2.0 * k - a)
 
     if (a < 0) or (b < 0):
-        raise ValueError("wignerd(l = {0}, m = {1}, n = {2}) value error.".format(l, m, n) \
-            + " Encountered negative values in (a,b) = ({0},{1})".format(a,b))
+        raise ValueError(
+            "wignerd(l = {0}, m = {1}, n = {2}) value error.".format(l, m, n)
+            + " Encountered negative values in (a,b) = ({0},{1})".format(a, b)
+        )
 
-    coeff1 = power(-1., lmb) 
-    coeff2 = sqrt(comb(2. * l - k, k + a))
-    coeff3 = (1. / sqrt(comb(k + b, b)))
+    coeff1 = power(-1.0, lmb)
+    coeff2 = sqrt(comb(2.0 * l - k, k + a))
+    coeff3 = 1.0 / sqrt(comb(k + b, b))
 
     coeff = coeff1 * coeff2 * coeff3
 
-    #print 'jacobi (exact)'
-    return lambda beta: coeff \
-        * power(sin(0.5*beta),a_float) \
-        * power(cos(0.5*beta),b_float) \
-        * jacobi(k,a,b_float)(cos(beta))
+    # print 'jacobi (exact)'
+    return (
+        lambda beta: coeff
+        * power(sin(0.5 * beta), a_float)
+        * power(cos(0.5 * beta), b_float)
+        * jacobi(k, a, b_float)(cos(beta))
+    )
 
 
 test_parameters = [
     (365, 102, 20, -4.23570250037880395095020243575390e-02, 8161.0 / 16384.0),
     (294, 247, 188, 1.11943794723176255836019618855372e-01, 7417.0 / 16384.0),
-    (3777, 1014, 690, 1.68450832524798173944840155878705e-03, 12233.0 / 16384.0),
+    (6496, 141, 94, 1.91605798359216822133779150869763e-03, 10134.0 / 16384.0),
 ]
 
 for test_parameter in test_parameters:
@@ -95,21 +99,3 @@ for test_parameter in test_parameters:
     print("Computed  : " + "{:.20f}".format(d_value))
     print("Difference: " + "{:.20f}".format(abs(d_value - correct_value)))
     print(" ------------------- ")
-
-
-# print test with print out value of d(1, 0, 0), beta = (pi * 7117.0 / 16384.0)
-print(f"d(1, 0, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(1, 0, 0)(np.pi * 7117.0 / 16384.0)}")
-
-# print test with print out value of d(1, 1, 0), beta = (pi * 7117.0 / 16384.0)
-print(f"d(1, 1, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(1, 1, 0)(np.pi * 7117.0 / 16384.0)}")
-
-# print test with print out value of d(1, 1, 0), beta = (pi * 7117.0 / 16384.0)
-print(f"d(5, 5, 0) beta = (pi * 7117.0 / 16384.0) = {wigner_d_naive_v3(5, 5, 0)(np.pi * 7117.0 / 16384.0)}")
-
-
-# print test with print out value of d(1, 0, 0), beta = (pi * 7117.0 / 16384.0)
-for k in range(2):
-    for m in range(2):
-        for j in range(3):
-            if abs(m) <= j and abs(k) <= j:
-                print(f"d({j}, {k}, {m}) = {wigner_d_naive_v3(j, k, m)(np.pi / 4.0)}")
