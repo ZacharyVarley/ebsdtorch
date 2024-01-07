@@ -1,6 +1,6 @@
 import torch
 
-from ebsdtorch.laue.orientations import (
+from ebsdtorch.s2_and_so3.orientations import (
     cu2ho,
     ho2qu,
     standardize_quaternion,
@@ -9,7 +9,9 @@ from ebsdtorch.laue.orientations import (
 
 
 @torch.jit.script
-def s2_fibonacci_lattice(n: int, mode: str = "avg") -> torch.Tensor:
+def s2_fibonacci_lattice(
+    n: int, device: torch.device, mode: str = "avg"
+) -> torch.Tensor:
     """
     Sample n points on the unit sphere using the Fibonacci spiral method.
     :param n: number of points to sample
@@ -43,11 +45,11 @@ def s2_fibonacci_lattice(n: int, mode: str = "avg") -> torch.Tensor:
     else:
         raise ValueError('mode must be either "avg" or "max"')
     # generate the points (they must be doubles for large numbers of points)
-    indices = torch.arange(n, dtype=torch.float64)
+    indices = torch.arange(n, dtype=torch.float64, device=device)
     theta = 2 * torch.pi * indices / phi
     phi = torch.acos(1 - 2 * (indices + epsilon) / (n - 1 + 2 * epsilon))
     points = theta_phi_to_xyz(theta, phi)
-    return points.float()
+    return points
 
 
 @torch.jit.script

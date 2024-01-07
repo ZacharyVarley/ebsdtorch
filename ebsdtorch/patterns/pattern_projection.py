@@ -1,11 +1,9 @@
-from typing import Optional, Tuple
+from typing import Optional
 import torch
 from torch import Tensor
 
 from ebsdtorch.patterns.square_hemisphere_bijection import square_lambert
-
-# from ebsdtorch.patterns.lie_algebra_se3 import se3_exp_map
-from ebsdtorch.laue.orientations import quaternion_apply
+from ebsdtorch.s2_and_so3.orientations import quaternion_apply
 
 # @torch.jit.script
 # def pattern_center_to_camera_matrix(
@@ -106,27 +104,6 @@ def detector_coords_to_ksphere_via_pc(
     r_g_array = r_g_array / torch.linalg.norm(r_g_array, dim=-1, keepdim=True)
 
     return r_g_array
-
-
-# @torch.jit.script
-# def detector_coords_to_ksphere_via_SE3_and_stretch(
-#     lie_representations: Tensor,
-#     coordinates_3d: Tensor,
-# ) -> Tensor:
-#     """
-#     Return sets of direction cosines for varying projection centers.
-
-#     This should be viewed as a transformation of coordinates specified by n_rows and
-#     n_cols in the detector plane to points on the sphere.
-
-#     Args:
-#         transformations: SE3 + Stretch transformations. Shape (..., 7). The first 6 elements
-#             are the SE3 transformation and the last element is the stretch.
-
-#     """
-
-#     # retrieve the SE3 transformation
-#     se3_transformations = se3_exp_map(lie_representations[..., :6])
 
 
 @torch.jit.script

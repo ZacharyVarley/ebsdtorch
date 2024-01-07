@@ -25,26 +25,56 @@ mean change in the covariance matrix is below the threshold.
 
 """
 
+import sys
+import time
 from typing import Tuple
 import torch
 from torch import Tensor
+import torch.nn as nn
+from torch.quantization import quantize_dynamic
+
 from ebsdtorch.patterns.pattern_projection import (
     project_pattern_single_geometry,
     detector_coords_to_ksphere_via_pc,
 )
-from ebsdtorch.ebsd_dictionary.welford_covariance_matrix import OnlineCovMatrix
-from ebsdtorch.laue.laue_orientation_fz import (
-    oris_are_in_so3_fz,
+
+from ebsdtorch.ebsd_dictionary_indexing.utils_covariance_matrix import OnlineCovMatrix
+from ebsdtorch.s2_and_so3.laue import (
+    so3_in_laue_fz,
     _points_are_in_s2_fz,
+    sample_orientations_laue_fz,
+    sample_sphere_laue_fz,
     LAUE_MULTS,
     LAUE_GROUPS,
 )
-from ebsdtorch.laue.orientations import quaternion_apply
-from ebsdtorch.laue.sampling import (
+from ebsdtorch.s2_and_so3.orientations import quaternion_apply
+from ebsdtorch.s2_and_so3.sampling import (
     s2_fibonacci_lattice,
-    so3_halton_cubochoric,
-    so3_cubochoric_grid,
 )
+
+
+def progressbar(it, prefix="", size=60, out=sys.stdout):  # Python3.6+
+    count = len(it)
+    start = time.time()
+
+    def show(j):
+        x = int(size * j / count)
+        remaining = ((time.time() - start) / j) * (count - j)
+
+        mins, sec = divmod(remaining, 60)
+        time_str = f"{int(mins):02}:{sec:05.2f}"
+
+        print(
+            f"{prefix}[{u'█'*x}{('.'*(size-x))}] {j}/{count} Est wait {time_str}",
+            end="\r",
+            file=out,
+            flush=True,
+        )
+
+    for i, item in enumerate(it):
+        yield item
+        show(i + 1)
+    print("\n", flush=True, file=out)
 
 
 @torch.jit.script
@@ -136,7 +166,7 @@ def _spherical_covmat(
     so3_samples = so3_cubochoric_grid(edge_length, master_pattern_MSLNH.device)
 
     # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[oris_are_in_so3_fz(so3_samples, laue_group)]
+    so3_samples_fz = so3_samples[so3_in_laue_fz(so3_samples, laue_group)]
 
     running_covmat = OnlineCovMatrix(num_s2_samples).to(master_pattern_MSLNH.device)
 
@@ -172,31 +202,6 @@ def _spherical_covmat(
         return corr_mat, num_s2_samples, s2_samples_fz
     else:
         return covmat, num_s2_samples, s2_samples_fz
-
-
-def _sample_orientations_fz(
-    laue_group: int,
-    so3_n_samples: int,
-    device: torch.device,
-) -> Tensor:
-    # find so3 samples in fundamental zone (same as spherical case)
-    # estimate the edge length needed to yield the desired number of samples
-    required_oversampling = torch.tensor([int(so3_n_samples * 1.018)])
-
-    # multiply by half the Laue multiplicity (inversion is not included in the operators)
-    required_oversampling = required_oversampling * 0.5 * LAUE_MULTS[laue_group - 1]
-
-    # take the cube root to get the edge length
-    edge_length = int(torch.ceil(torch.pow(required_oversampling, 1 / 3)))
-    so3_samples = so3_cubochoric_grid(edge_length, device=device)
-
-    # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[oris_are_in_so3_fz(so3_samples, laue_group)]
-
-    # randomly permute the samples
-    so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
-
-    return so3_samples_fz
 
 
 # @torch.jit.script
@@ -296,9 +301,48 @@ WARNING: I have explored many approximation methods such as HNSW, IVF-Flat, etc 
 They are not worth running on the raw EBSD images because the time invested in building the index is
 large. For cubic materials, a dictionary around 100,000 images is needed, and most methods will take
 10s of seconds if the patterns are larger than 60x60 = 3600 dimensions. PCA requires <10 seconds
-investment, even using Online covariance matrix estimation approaches. 
+investment, even using Online covariance matrix estimation approaches that stream pattern projection.
 
 """
+
+
+class M(torch.nn.Module):
+    def __init__(
+        self,
+        dims_in: int,
+        dims_out: int,
+    ):
+        super(M, self).__init__()
+        self.fc = torch.nn.Linear(dims_in, dims_out, bias=False)
+
+    def forward(self, inp):
+        mult_out = self.fc(inp)
+        return mult_out.T
+
+
+def default_quantize_module(my_module):
+    model_quantized = quantize_dynamic(
+        model=my_module, qconfig_spec={nn.Linear}, dtype=torch.qint8, inplace=False
+    )
+    # qconfig_dict = {
+    #     "": torch.quantization.default_dynamic_qconfig
+    # }  # An empty key denotes the default applied to all modules
+    # model_prepared = quantize_fx.prepare_fx(my_module, qconfig_dict)
+    # model_quantized = quantize_fx.convert_fx(model_prepared)
+    return model_quantized
+
+
+def quantized_x_for_query_untransposed(
+    x: Tensor,
+):
+    m = M(x.shape[1], x.shape[0])
+    m.fc.weight.data = x
+    m.eval()
+
+    # quantize the model
+    m_int8 = default_quantize_module(m)
+
+    return m_int8
 
 
 @torch.jit.script
@@ -318,14 +362,11 @@ def knn_batch(
             + x_train_norm.view(1, -1)
             - 2 * query @ x_train.t()  # Rely on cuBLAS for better performance!
         )
-
     elif metric == "manhattan":
         diss = (query[:, None, :] - x_train[None, :, :]).abs().sum(dim=2)
-
     elif metric == "angular":
         diss = query @ x_train.t()
         largest = True
-
     elif metric == "hyperbolic":
         query_norm = (query**2).sum(-1)
         diss = (
@@ -335,13 +376,12 @@ def knn_batch(
     else:
         raise NotImplementedError(f"The '{metric}' distance is not supported.")
 
-    return diss.topk(K, dim=1, largest=largest).indices
+    return diss.topk(K, dim=1, largest=largest, sorted=True).indices
 
 
-@torch.jit.script
 def knn_brute_force(
-    x_train_in: Tensor,
-    query_in: Tensor,
+    x_train: Tensor,
+    query: Tensor,
     topk: int,
     av_mem: float,
     metric: str = "euclidean",
@@ -351,12 +391,30 @@ def knn_brute_force(
     Batched exact K-NN query on a GPU.
 
     """
+
+    if match_dtype == torch.int8:
+        # print warning that int8 quantization is only CPU supported right now
+        print("WARNING: int8 quantization is only CPU supported right now.")
+        if x_train.device != torch.device("cpu"):
+            raise ValueError("int8 quantization is only CPU supported right now.")
+        n_bytes = 1
+        # prepare the model
+        x_train_q_module = quantized_x_for_query_untransposed(x_train)
+    elif match_dtype == torch.float16:
+        n_bytes = 2
+    elif match_dtype == torch.float32:
+        n_bytes = 4
+    elif match_dtype == torch.float64:
+        n_bytes = 8
+
     # cast to matching dtype
-    x_train = x_train_in.to(match_dtype)
-    query = query_in.to(match_dtype)
+    if match_dtype != torch.int8:
+        x_train = x_train.to(match_dtype)
+        query = query.to(match_dtype)
 
     # Setup the K-NN estimator:
     Ntrain, D = x_train.shape
+
     # The "training" time here should be negligible:
     x_train_norm = (x_train**2).sum(-1)
 
@@ -364,13 +422,27 @@ def knn_brute_force(
     Ntest = query.shape[0]
     # Remember that a vector of D float32 number takes up 4*D bytes:
 
-    Ntest_loop = int(min(max(1, av_mem * 1e9 // (4 * D * Ntrain)), Ntest))
+    Ntest_loop = int(min(max(1, av_mem * 1e9 // (n_bytes * D * Ntrain)), Ntest))
     knn_indices = []
 
     print(f"{Ntrain} dictionary entries against {Ntest_loop} patterns per batch.")
 
     for query_batch in torch.split(query, Ntest_loop):
-        knn_indices.append(knn_batch(x_train, x_train_norm, query_batch, topk, metric))
+        if match_dtype == torch.int8:
+            # quantize the query
+            knn_indices.append(
+                torch.topk(
+                    (x_train_q_module(query_batch)),
+                    topk,
+                    dim=0,
+                    largest=True,
+                    sorted=True,
+                ).indices.squeeze()
+            )
+        else:
+            knn_indices.append(
+                knn_batch(x_train, x_train_norm, query_batch, topk, metric)
+            )
 
     return torch.cat(knn_indices, dim=0)
 
@@ -676,8 +748,8 @@ class EBSDExperiment(torch.nn.Module):
 
         # compute the indices of the topk matches
         indices = knn_brute_force(
-            x_train_in=self.dictionary_pca_loadings[:, -n_pca_components:].float(),
-            query_in=projected_dataset,
+            x_train=self.dictionary_pca_loadings[:, -n_pca_components:].float(),
+            query=projected_dataset,
             topk=topk,
             av_mem=target_ram_allocation_GB,
             metric=metric,
@@ -691,7 +763,8 @@ class EBSDExperiment(torch.nn.Module):
 # import matplotlib.pyplot as plt
 
 
-# device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+# # device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+# device = torch.device("cpu")
 
 # # get the example dataset
 # s = kp.load("../datafolder/Hakon_Ni/Pattern.dat")
@@ -733,14 +806,14 @@ class EBSDExperiment(torch.nn.Module):
 
 # ebsd.compute_PCA_detector_plane(
 #     so3_n_samples=100000,
-#     so3_batch_size=10000,
+#     so3_batch_size=1000,
 #     correlation=False,
 # )
 
 # ebsd.project_dictionary_pca(
 #     pca_n_max_components=2000,
-#     so3_n_samples=200000,
-#     so3_batch_size=10000,
+#     so3_n_samples=100000,
+#     so3_batch_size=1000,
 # )
 
 # # time it
@@ -754,7 +827,7 @@ class EBSDExperiment(torch.nn.Module):
 #     topk=1,
 #     target_ram_allocation_GB=12.0,
 #     metric="angular",
-#     match_dtype=torch.float16,
+#     match_dtype=torch.int8,
 # )
 
 # duration = time.time() - start

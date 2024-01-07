@@ -1,5 +1,5 @@
 import torch
-import numpy as np
+from torch import Tensor
 
 """
 
@@ -34,7 +34,7 @@ ro: tan(w / 2)
 
 
 @torch.jit.script
-def theta_phi_to_xyz(theta: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
+def theta_phi_to_xyz(theta: Tensor, phi: Tensor) -> Tensor:
     """
     Convert spherical coordinates to cartesian coordinates.
     :param theta: torch tensor of shape (n, ) containing the polar declination angles
@@ -52,7 +52,7 @@ def theta_phi_to_xyz(theta: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def xyz_to_theta_phi(xyz: torch.Tensor) -> torch.Tensor:
+def xyz_to_theta_phi(xyz: Tensor) -> Tensor:
     """
     Convert cartesian coordinates to latitude and longitude.
     :param xyz: torch tensor of shape (n, 3) containing the cartesian coordinates
@@ -73,7 +73,7 @@ def xyz_to_theta_phi(xyz: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def standardize_quaternion(quaternions: torch.Tensor) -> torch.Tensor:
+def standardize_quaternion(quaternions: Tensor) -> Tensor:
     """
     Convert a unit quaternion to a standard form: one in which the real
     part is non-negative.
@@ -89,7 +89,7 @@ def standardize_quaternion(quaternions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quaternion_raw_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def quaternion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two quaternions.
     Usual torch rules for broadcasting apply.
@@ -111,7 +111,7 @@ def quaternion_raw_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quaternion_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def quaternion_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two quaternions representing rotations, returning the quaternion
     representing their composition, i.e. the versor with nonnegative real part.
@@ -129,7 +129,7 @@ def quaternion_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quaternion_real_of_prod(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def quaternion_real_of_prod(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two quaternions and return the positive real part of the product.
 
@@ -148,7 +148,7 @@ def quaternion_real_of_prod(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quaternion_invert(quaternion: torch.Tensor) -> torch.Tensor:
+def quaternion_invert(quaternion: Tensor) -> Tensor:
     """
     Given a quaternion representing rotation, get the quaternion representing
     its inverse.
@@ -166,7 +166,7 @@ def quaternion_invert(quaternion: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quaternion_apply(quaternion: torch.Tensor, point: torch.Tensor) -> torch.Tensor:
+def quaternion_apply(quaternion: Tensor, point: Tensor) -> Tensor:
     """
     Apply the rotation given by a quaternion to a 3D point.
     Usual torch rules for broadcasting apply.
@@ -190,9 +190,37 @@ def quaternion_apply(quaternion: torch.Tensor, point: torch.Tensor) -> torch.Ten
 
 
 @torch.jit.script
-def quaternion_rotate_sets_sphere(
-    points_start: torch.Tensor, points_finish
-) -> torch.Tensor:
+def normalize_quaternion(quaternion: Tensor) -> Tensor:
+    """
+    Normalize a quaternion to a unit quaternion.
+
+    Args:
+        quaternion: Quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Normalized quaternions as tensor of shape (..., 4).
+    """
+    return quaternion / torch.norm(quaternion, dim=-1, keepdim=True)
+
+
+@torch.jit.script
+def norm_standard_quaternion(quaternion: Tensor) -> Tensor:
+    """
+    Normalize a quaternion to a unit quaternion and standardize it.
+
+    Args:
+        quaternion: Quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Normalized and standardized quaternions as tensor of shape (..., 4).
+    """
+    return standardize_quaternion(normalize_quaternion(quaternion))
+
+
+@torch.jit.script
+def quaternion_rotate_sets_sphere(points_start: Tensor, points_finish) -> Tensor:
     """
     Determine the quaternions that rotate the points_start to the points_finish.
     All points are assumed to be on the unit sphere. The cross product is used
@@ -232,7 +260,7 @@ def quaternion_rotate_sets_sphere(
 
 
 @torch.jit.script
-def misorientation_angle(quaternion: torch.Tensor) -> torch.Tensor:
+def misorientation_angle(quaternion: Tensor) -> Tensor:
     """
     Compute the misorientation angle for a quaternion.
 
@@ -252,7 +280,7 @@ def misorientation_angle(quaternion: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def octionion_standardize(octonions: torch.Tensor) -> torch.Tensor:
+def octionion_standardize(octonions: Tensor) -> Tensor:
     """
     Convert a unit octonion to a standard form: one in which the real
     part is non-negative.
@@ -268,7 +296,7 @@ def octionion_standardize(octonions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def octonion_raw_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def octonion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two octonions.
     Usual torch rules for broadcasting apply.
@@ -298,7 +326,7 @@ def octonion_raw_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def octonion_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def octonion_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two octonions representing rotations, returning the octonion
     representing their composition, i.e. the versor with nonnegative real part.
@@ -316,7 +344,7 @@ def octonion_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def octonion_invert(octonion: torch.Tensor) -> torch.Tensor:
+def octonion_invert(octonion: Tensor) -> Tensor:
     """
     Given an octonion representing rotation, get the octonion representing
     its inverse.
@@ -334,7 +362,7 @@ def octonion_invert(octonion: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def octonion_misorientation_angle(octonion: torch.Tensor) -> torch.Tensor:
+def octonion_misorientation_angle(octonion: Tensor) -> Tensor:
     """
     Compute the misorientation angle for an octonion.
 
@@ -353,7 +381,7 @@ def octonion_misorientation_angle(octonion: torch.Tensor) -> torch.Tensor:
 # -------------------------------------------------------------------
 
 
-def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
+def _sqrt_positive_part(x: Tensor) -> Tensor:
     """
     Returns torch.sqrt(torch.max(0, x))
     but with a zero subgradient where x is 0.
@@ -365,7 +393,7 @@ def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2qu(matrix: torch.Tensor) -> torch.Tensor:
+def om2qu(matrix: Tensor) -> Tensor:
     """
     Convert rotations given as rotation matrices to quaternions.
 
@@ -419,7 +447,7 @@ def om2qu(matrix: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2ho(cu: torch.Tensor) -> torch.Tensor:
+def cu2ho(cu: Tensor) -> Tensor:
     """
     Convert cubochoric coordinates to homochoric coordinates.
 
@@ -505,13 +533,13 @@ def cu2ho(cu: torch.Tensor) -> torch.Tensor:
     # wherever cu had (0, 0, z) ho should be set to be (0, 0, np.sqrt(6 / np.pi) * z)
     mask_z = torch.abs(cu[:, :2]).sum(dim=1) == 0
     ho[mask_z, :2] = 0
-    ho[mask_z, 2] = torch.sqrt(6 / torch.pi) * cu[mask_z, 2]
+    ho[mask_z, 2] = (6.0 / torch.pi) ** 0.5 * cu[mask_z, 2]
 
     return ho
 
 
 @torch.jit.script
-def ho2cu(ho: torch.Tensor) -> torch.Tensor:
+def ho2cu(ho: Tensor) -> Tensor:
     """
     Homochoric vector to cubochoric vector.
     """
@@ -550,12 +578,12 @@ def ho2cu(ho: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ho2ax(ho: torch.Tensor) -> torch.Tensor:
+def ho2ax(ho: Tensor) -> Tensor:
     """
     Converts a set of homochoric vectors to axis-angle representation.
 
     Args:
-        ho (torch.Tensor): A tensor of shape (N, 3) containing N homochoric vectors.
+        ho (Tensor): A tensor of shape (N, 3) containing N homochoric vectors.
 
     Returns:
         torch.Tensor: A tensor of shape (N, 4) containing the corresponding axis-angle representations.
@@ -612,7 +640,7 @@ def ho2ax(ho: torch.Tensor) -> torch.Tensor:
     # the axis is inherited no matter what
     ax[~mask_zero, :3] = hon[~mask_zero]
     # if we are at pi condition
-    mask_pi = torch.abs(s - torch.tensor(np.pi, dtype=ho.dtype)) < 1e-8
+    mask_pi = torch.abs(s - torch.pi) < 1e-8
     ax[~mask_zero & mask_pi, 3] = torch.pi
     # rest are normal
     ax[~mask_zero & ~mask_pi, 3] = s[~mask_zero & ~mask_pi]
@@ -620,12 +648,12 @@ def ho2ax(ho: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2ho(ax: torch.Tensor) -> torch.Tensor:
+def ax2ho(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to homochoric representation.
 
     Args:
-        ax (torch.Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
+        ax (Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
             Each row represents an axis-angle representation in the format (x, y, z, angle).
 
     Returns:
@@ -637,12 +665,12 @@ def ax2ho(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2ro(ax: torch.Tensor) -> torch.Tensor:
+def ax2ro(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to rotation matrix representation.
 
     Args:
-        ax (torch.Tensor): Tensor of shape (N, 4) representing N axis-angle vectors.
+        ax (Tensor): Tensor of shape (N, 4) representing N axis-angle vectors.
 
     Returns:
         torch.Tensor: Tensor of shape (N, 4) representing N Rodrigues vectors.
@@ -664,12 +692,12 @@ def ax2ro(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2ax(ro: torch.Tensor) -> torch.Tensor:
+def ro2ax(ro: Tensor) -> Tensor:
     """
     Converts a rotation vector to an axis-angle representation.
 
     Args:
-        ro (torch.Tensor): A tensor of shape (N, 4) Rodrigues vectors.
+        ro (Tensor): A tensor of shape (N, 4) Rodrigues vectors.
 
     Returns:
         torch.Tensor: A tensor of shape (N, 4) axis-angle representations.
@@ -690,12 +718,12 @@ def ro2ax(ro: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2qu(ax: torch.Tensor) -> torch.Tensor:
+def ax2qu(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to quaternion representation.
 
     Args:
-        ax (torch.Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
+        ax (Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
             Each row represents an axis-angle representation in the format (x, y, z, angle).
 
     Returns:
@@ -719,12 +747,12 @@ def ax2qu(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2ax(qu: torch.Tensor) -> torch.Tensor:
+def qu2ax(qu: Tensor) -> Tensor:
     """
     Converts quaternion representation to axis-angle representation.
 
     Args:
-        qu (torch.Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
+        qu (Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
             Each row represents a quaternion in the format (w, x, y, z).
 
     Returns:
@@ -756,12 +784,12 @@ def qu2ax(qu: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2ro(qu: torch.Tensor) -> torch.Tensor:
+def qu2ro(qu: Tensor) -> Tensor:
     """
     Converts quaternion representation to Rodrigues-Frank vector representation.
 
     Args:
-        qu (torch.Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
+        qu (Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
             Each row represents a quaternion in the format (w, x, y, z).
 
     Returns:
@@ -780,7 +808,7 @@ def qu2ro(qu: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2om(quaternions: torch.Tensor) -> torch.Tensor:
+def qu2om(quaternions: Tensor) -> Tensor:
     """
     Convert rotations given as quaternions to rotation matrices.
 
@@ -812,7 +840,7 @@ def qu2om(quaternions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def _copysign(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def _copysign(a: Tensor, b: Tensor) -> Tensor:
     """
     Return a tensor where each element has the absolute value taken from the,
     corresponding element of a, with sign taken from the corresponding
@@ -831,7 +859,7 @@ def _copysign(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
+def _axis_angle_rotation(axis: str, angle: Tensor) -> Tensor:
     """
     Return the rotation matrices for one of the rotations about an axis
     of which Euler angles describe, for each value of the angle given.
@@ -862,7 +890,7 @@ def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2om(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2om(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to rotation matrices.
 
@@ -894,7 +922,7 @@ def eu2om(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 @torch.jit.script
 def _angle_from_tan(
     axis: str, other_axis: str, data, horizontal: bool, tait_bryan: bool
-) -> torch.Tensor:
+) -> Tensor:
     """
     Extract the first or third Euler angle from the two members of
     the matrix which are positive constant times its sine and cosine.
@@ -937,7 +965,7 @@ def _index_from_letter(letter: str) -> int:
 
 
 @torch.jit.script
-def om2eu(matrix: torch.Tensor, convention: str) -> torch.Tensor:
+def om2eu(matrix: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as rotation matrices to Euler angles in radians.
 
@@ -980,7 +1008,7 @@ def om2eu(matrix: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def zh2om(zh: torch.Tensor) -> torch.Tensor:
+def zh2om(zh: Tensor) -> Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to rotation matrix
     using Gram--Schmidt orthogonalization per Section B of [1].
@@ -1006,7 +1034,7 @@ def zh2om(zh: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2zh(matrix: torch.Tensor) -> torch.Tensor:
+def om2zh(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to 6D rotation representation by Zhou et al. [1]
     by dropping the last row. Note that 6D representation is not unique.
@@ -1026,7 +1054,7 @@ def om2zh(matrix: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def zh2qu(zh: torch.Tensor) -> torch.Tensor:
+def zh2qu(zh: Tensor) -> Tensor:
     """
     Converts 6D rotation representation by Zhou et al. [1] to quaternion
     representation using Gram--Schmidt orthogonalization per Section B of [1].
@@ -1046,7 +1074,7 @@ def zh2qu(zh: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2zh(quaternions: torch.Tensor) -> torch.Tensor:
+def qu2zh(quaternions: Tensor) -> Tensor:
     """
     Converts quaternion representation to 6D rotation representation by Zhou et al. [1]
     by dropping the last row. Note that 6D representation is not unique.
@@ -1093,7 +1121,7 @@ def qu2zh(quaternions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2cu(quaternions: torch.Tensor) -> torch.Tensor:
+def qu2cu(quaternions: Tensor) -> Tensor:
     """
     Convert rotations given as quaternions to cubochoric vectors.
 
@@ -1108,7 +1136,7 @@ def qu2cu(quaternions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2ax(matrix: torch.Tensor) -> torch.Tensor:
+def om2ax(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to axis-angle representation.
 
@@ -1122,7 +1150,7 @@ def om2ax(matrix: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2ho(matrix: torch.Tensor) -> torch.Tensor:
+def om2ho(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to homochoric vector representation.
 
@@ -1136,7 +1164,7 @@ def om2ho(matrix: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2ho(quaternions: torch.Tensor) -> torch.Tensor:
+def qu2ho(quaternions: Tensor) -> Tensor:
     """
     Converts quaternions to homochoric vector representation.
 
@@ -1151,7 +1179,7 @@ def qu2ho(quaternions: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2om(ax: torch.Tensor) -> torch.Tensor:
+def ax2om(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to rotation matrix representation.
 
@@ -1165,7 +1193,7 @@ def ax2om(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2cu(ax: torch.Tensor) -> torch.Tensor:
+def ax2cu(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to cubochoric vector representation.
 
@@ -1179,7 +1207,7 @@ def ax2cu(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2ho(ax: torch.Tensor) -> torch.Tensor:
+def ax2ho(ax: Tensor) -> Tensor:
     """
     Converts axis-angle representation to homochoric vector representation.
 
@@ -1193,7 +1221,7 @@ def ax2ho(ax: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ax2eu(ax: torch.Tensor, convention: str) -> torch.Tensor:
+def ax2eu(ax: Tensor, convention: str) -> Tensor:
     """
     Converts axis-angle representation to Euler angles in radians.
 
@@ -1209,7 +1237,7 @@ def ax2eu(ax: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2qu(ro: torch.Tensor) -> torch.Tensor:
+def ro2qu(ro: Tensor) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to quaternions.
 
@@ -1223,7 +1251,7 @@ def ro2qu(ro: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2om(ro: torch.Tensor) -> torch.Tensor:
+def ro2om(ro: Tensor) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to rotation matrices.
 
@@ -1237,7 +1265,7 @@ def ro2om(ro: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2cu(ro: torch.Tensor) -> torch.Tensor:
+def ro2cu(ro: Tensor) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to cubochoric vectors.
 
@@ -1251,7 +1279,7 @@ def ro2cu(ro: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2ho(ro: torch.Tensor) -> torch.Tensor:
+def ro2ho(ro: Tensor) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to homochoric vectors.
 
@@ -1265,7 +1293,7 @@ def ro2ho(ro: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ro2eu(ro: torch.Tensor, convention: str) -> torch.Tensor:
+def ro2eu(ro: Tensor, convention: str) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to Euler angles in radians.
 
@@ -1281,7 +1309,7 @@ def ro2eu(ro: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2ax(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
+def cu2ax(cubochoric_vectors: Tensor) -> Tensor:
     """
     Converts cubochoric vector representation to axis-angle representation.
 
@@ -1295,7 +1323,7 @@ def cu2ax(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2qu(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
+def cu2qu(cubochoric_vectors: Tensor) -> Tensor:
     """
     Converts cubochoric vector representation to quaternions.
 
@@ -1309,7 +1337,7 @@ def cu2qu(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2om(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
+def cu2om(cubochoric_vectors: Tensor) -> Tensor:
     """
     Converts cubochoric vector representation to rotation matrices.
 
@@ -1323,7 +1351,7 @@ def cu2om(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2ro(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
+def cu2ro(cubochoric_vectors: Tensor) -> Tensor:
     """
     Converts cubochoric vector representation to Rodrigues-Frank vector representation.
 
@@ -1337,7 +1365,7 @@ def cu2ro(cubochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def cu2eu(cubochoric_vectors: torch.Tensor, convention: str) -> torch.Tensor:
+def cu2eu(cubochoric_vectors: Tensor, convention: str) -> Tensor:
     """
     Converts cubochoric vector representation to Euler angles in radians.
 
@@ -1353,7 +1381,7 @@ def cu2eu(cubochoric_vectors: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def ho2qu(homochoric_vectors: torch.Tensor) -> torch.Tensor:
+def ho2qu(homochoric_vectors: Tensor) -> Tensor:
     """
     Converts homochoric vector representation to quaternions.
 
@@ -1367,7 +1395,7 @@ def ho2qu(homochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ho2om(homochoric_vectors: torch.Tensor) -> torch.Tensor:
+def ho2om(homochoric_vectors: Tensor) -> Tensor:
     """
     Converts homochoric vector representation to rotation matrices.
 
@@ -1381,7 +1409,7 @@ def ho2om(homochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ho2ro(homochoric_vectors: torch.Tensor) -> torch.Tensor:
+def ho2ro(homochoric_vectors: Tensor) -> Tensor:
     """
     Converts homochoric vector representation to Rodrigues-Frank vector representation.
 
@@ -1395,7 +1423,7 @@ def ho2ro(homochoric_vectors: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def ho2eu(homochoric_vectors: torch.Tensor, convention: str) -> torch.Tensor:
+def ho2eu(homochoric_vectors: Tensor, convention: str) -> Tensor:
     """
     Converts homochoric vector representation to Euler angles in radians.
 
@@ -1411,7 +1439,7 @@ def ho2eu(homochoric_vectors: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2ax(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2ax(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to axis-angle representation.
 
@@ -1427,7 +1455,7 @@ def eu2ax(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2qu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2qu(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to quaternions.
 
@@ -1443,7 +1471,7 @@ def eu2qu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2ro(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2ro(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to Rodrigues-Frank vector representation.
 
@@ -1459,7 +1487,7 @@ def eu2ro(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2cu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to cubochoric vectors.
 
@@ -1475,7 +1503,7 @@ def eu2cu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def qu2eu(quaternions: torch.Tensor, convention: str) -> torch.Tensor:
+def qu2eu(quaternions: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as quaternions to Euler angles in radians.
 
@@ -1492,7 +1520,7 @@ def qu2eu(quaternions: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2qu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2qu(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to quaternions.
 
@@ -1508,7 +1536,7 @@ def eu2qu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2cu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to cubochoric vectors.
 
@@ -1524,7 +1552,7 @@ def eu2cu(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def eu2ho(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def eu2ho(euler_angles: Tensor, convention: str) -> Tensor:
     """
     Convert rotations given as Euler angles in radians to homochoric vectors.
 
@@ -1539,7 +1567,7 @@ def eu2ho(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2ro(matrix: torch.Tensor) -> torch.Tensor:
+def om2ro(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to Rodrigues-Frank vector representation.
 
@@ -1553,7 +1581,7 @@ def om2ro(matrix: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def om2cu(matrix: torch.Tensor) -> torch.Tensor:
+def om2cu(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to cubochoric vector representation.
 

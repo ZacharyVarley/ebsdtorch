@@ -176,25 +176,26 @@ return; end
 
 """
 
+
 @torch.jit.script
-def xwdvc(jmax2: Tensor,
-          k2: Tensor,
-          m2: Tensor,
-          tc: Tensor,
-          d_kkm_x: Tensor,
-          d_kkm_i: Tensor,
+def xwdvc(
+    jmax2: Tensor,
+    k2: Tensor,
+    m2: Tensor,
+    tc: Tensor,
+    d_kkm_x: Tensor,
+    d_kkm_i: Tensor,
 ) -> Tensor:
-    
     xd0 = d_kkm_x
     id0 = d_kkm_i
-    
+
     dkm = torch.zeros(int(jmax2 - k2) // 2 + 1, dtype=torch.float64)
     # xd0, id0 = x_norm(xd0, id0)
     dkm[0] = x2f(xd0, id0)[0]
 
     if jmax2 <= k2:
         return dkm
-    
+
     m2k2 = m2 * k2
     j2 = k2 + 2
     j2mm2 = j2 - m2
@@ -202,9 +203,11 @@ def xwdvc(jmax2: Tensor,
     # *****************************************
     # *****************************************
     # This line assumes that Beta is between 0 and pi/2, but it need not be
-    # Further, for SO3 convolution, Beta will be at pi/2, which needs 
+    # Further, for SO3 convolution, Beta will be at pi/2, which needs
     # special handling for numerical stability. This is a test implementation.
-    a = ((j2 - 1).double() / ((j2 + m2) * j2mm2).double())**0.5 * (j2mm2.double() - j2.double() * tc)
+    a = ((j2 - 1).double() / ((j2 + m2) * j2mm2).double()) ** 0.5 * (
+        j2mm2.double() - j2.double() * tc
+    )
     # *****************************************
     # *****************************************
     # *****************************************
@@ -222,9 +225,19 @@ def xwdvc(jmax2: Tensor,
         j2pm2 = j2 + m2
         j2mm2 = j2 - m2
         # w=1.d0/(dble(j22)*sqrt(dble(j2pk2*j2mk2)*dble(j2pm2*j2mm2)))
-        w = 1.0 / (j22.double() * ((j2pk2 * j2mk2).double() * (j2pm2 * j2mm2).double())**0.5)
+        w = 1.0 / (
+            j22.double() * ((j2pk2 * j2mk2).double() * (j2pm2 * j2mm2).double()) ** 0.5
+        )
         # b=w*dble(j2)*sqrt(dble((j2pk2-2)*(j2mk2-2))*dble((j2pm2-2)*(j2mm2-2)))
-        b = w * j2.double() * (((j2pk2 - 2) * (j2mk2 - 2)).double() * ((j2pm2 - 2) * (j2mm2 - 2)).double())**0.5
+        b = (
+            w
+            * j2.double()
+            * (
+                ((j2pk2 - 2) * (j2mk2 - 2)).double()
+                * ((j2pm2 - 2) * (j2mm2 - 2)).double()
+            )
+            ** 0.5
+        )
         # a=w*dble(j2+j22)*(dble(j2j22-m2k2)-dble(j2j22)*tc)
         a = w * (j2 + j22).double() * ((j2j22 - m2k2).double() - j2j22.double() * tc)
 
@@ -289,12 +302,14 @@ end program prtxwdc
 
 """
 
+
 @torch.jit.script
-def xwdvc_driver(jmax2: Tensor,
-                 beta: Tensor,
+def xwdvc_driver(
+    jmax2: Tensor,
+    beta: Tensor,
 ) -> None:
     """
-    This is the driver for the xwdvc function. It will print out the values of Wigner's d-functions 
+    This is the driver for the xwdvc function. It will print out the values of Wigner's d-functions
     for all the degree/orders satisfying the condition, 0 ≤ m ≤ k ≤ j ≤ J, given J and β.
 
     """
@@ -330,7 +345,6 @@ def xwdvc_driver(jmax2: Tensor,
         xs[n] = sn[0]
         i_s[n] = isn[0]
 
-
     for m2 in torch.arange(int(j0), int(jmax2) + 2, step=2, dtype=torch.int64):
         fm = m2.double() * 0.5
         xekm = torch.ones(1, dtype=torch.float64)
@@ -346,7 +360,7 @@ def xwdvc_driver(jmax2: Tensor,
                 f = (k2.double() * (k2.double() - 1)) / (kpm.double() * kmm.double())
                 xekm = xekm * f**0.5
                 xekm, iekm = x_norm(xekm, iekm)
-                
+
             # print(f'xekm for k2    = {k2.item()} and m2 = {m2.item()}: {xekm.item()}')
 
             xdkkm = xc[kpm] * xs[kmm]
@@ -363,15 +377,28 @@ def xwdvc_driver(jmax2: Tensor,
             # print(f'xdkkm for k2   = {k2.item()} and m2 = {m2.item()}: {xdkkm.item()}')
 
             dkm = xwdvc(jmax2, k2, m2, tc, xdkkm, idkkm)
-            
+
             index = 0
             for j2 in torch.arange(int(k2), int(jmax2) + 2, step=2, dtype=torch.int64):
                 fj = j2.double() * 0.5
-                print(f"fj: {fj.item()}, fk: {fk.item()}, fm: {fm.item()}, dkm: {dkm[index].item()} item number {index + 1} out of {dkm.shape[0]}")
+                print(
+                    f"fj: {fj.item()}, fk: {fk.item()}, fm: {fm.item()}, dkm: {dkm[index].item()} item number {index + 1} out of {dkm.shape[0]}"
+                )
                 index += 1
+
 
 # test out the functions
 xwdvc_driver(
-    jmax2=torch.tensor([4,], dtype=torch.int64),
-    beta=torch.tensor([torch.pi * 7417.0 / 16384.0,], dtype=torch.float64),
+    jmax2=torch.tensor(
+        [
+            4,
+        ],
+        dtype=torch.int64,
+    ),
+    beta=torch.tensor(
+        [
+            torch.pi * 7417.0 / 16384.0,
+        ],
+        dtype=torch.float64,
+    ),
 )

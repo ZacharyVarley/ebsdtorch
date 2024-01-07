@@ -6,8 +6,11 @@ from ebsdtorch.patterns.square_hemisphere_bijection import (
     square_lambert,
     inv_square_lambert,
 )
-from ebsdtorch.laue.orientations import quaternion_apply, quaternion_rotate_sets_sphere
-from ebsdtorch.laue.sampling import (
+from ebsdtorch.s2_and_so3.orientations import (
+    quaternion_apply,
+    quaternion_rotate_sets_sphere,
+)
+from ebsdtorch.s2_and_so3.sampling import (
     s2_fibonacci_lattice,
     theta_phi_to_xyz,
     xyz_to_theta_phi,
