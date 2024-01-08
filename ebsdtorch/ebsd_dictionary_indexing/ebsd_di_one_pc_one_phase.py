@@ -243,19 +243,24 @@ class EBSDDI(torch.nn.Module):
 
         # if the projected dataset is on the CPU, use the quantized version
         # and force the usage of angular distance
-        if override_quantization and experimental_data.device == torch.device("cpu"):
+        if override_quantization and match_device == torch.device("cpu"):
+            print("Using quantized distance on the CPU")
+            self.patterns = self.patterns.cpu()
+            experimental_data = experimental_data.cpu()
             indices = knn_quantized(
                 data=self.patterns,
+                data_chunk_size=16384,
                 query=experimental_data,
+                query_chunk_size=16384,
                 topk=topk,
-                available_ram_GB=target_RAM_GB,
             )
         else:
             indices = knn(
                 data=self.patterns,
+                data_chunk_size=32768,
                 query=experimental_data,
+                query_chunk_size=4096,
                 topk=topk,
-                available_ram_GB=target_VRAM_GB,
                 distance_metric=metric,
                 match_dtype=match_dtype,
                 match_device=match_device,

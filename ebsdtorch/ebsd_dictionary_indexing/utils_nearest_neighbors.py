@@ -30,6 +30,7 @@ projection.
 
  """
 
+from typing import Tuple
 import torch
 from torch.nn import Linear, Module
 from torch import Tensor
@@ -57,7 +58,7 @@ def quant_model(t: Tensor) -> Module:
 
 def topk_quant(q_batch: Tensor, q_model: Module, k: int) -> Tensor:
     res = torch.topk(q_model(q_batch), k, dim=1, largest=True, sorted=True)
-    return res.indices
+    return res.values, res.indices
 
 
 def calc_norm(t: Tensor) -> Tensor:
@@ -67,7 +68,7 @@ def calc_norm(t: Tensor) -> Tensor:
 @torch.jit.script
 def knn_batch(
     data: Tensor, data_norm: Tensor, query: Tensor, topk: int, metric: str
-) -> Tensor:
+) -> Tuple[Tensor, Tensor]:
     lgst = True if metric == "angular" else False
     if metric == "euclidean":
         """
@@ -88,79 +89,305 @@ def knn_batch(
         dist = query @ data.t()
     else:
         raise NotImplementedError(f"'{metric}' not supported.")
-    return dist.topk(topk, dim=1, largest=lgst, sorted=True).indices
+    topk_distances, topk_indices = dist.topk(topk, dim=1, largest=lgst, sorted=False)
+    return topk_distances, topk_indices
+
+
+@torch.jit.script
+def knn_batches(
+    data: Tensor,
+    data_norm: Tensor,
+    query: Tensor,
+    data_chunk_idxs: Tensor,
+    data_chunks_n: int,
+    data_chunk_size: int,
+    query_chunk_idxs: Tensor,
+    query_chunk_size: int,
+    topk: int,
+    metric: str,
+    lrgst: bool,
+    match_device: torch.device,
+    match_dtype: torch.dtype,
+):
+    n_query = query.shape[0]
+
+    knn_indices_unreduced = torch.empty(
+        (n_query, topk * data_chunks_n),
+        device=match_device,
+        dtype=torch.int64,
+    )
+    knn_distances_unreduced = torch.empty(
+        (n_query, topk * data_chunks_n),
+        device=match_device,
+        dtype=match_dtype,
+    )
+
+    for query_start in query_chunk_idxs:
+        # get the query chunk
+        query_end = query_start + query_chunk_size
+        query_chunk = query[query_start:query_end]
+
+        for data_start in data_chunk_idxs:
+            # get the data chunk
+            data_end = data_start + data_chunk_size
+            data_chunk = data[data_start:data_end]
+
+            # get the indices of the nearest neighbors
+            knn_distances_chunk, knn_indices_chunk = knn_batch(
+                data_chunk,
+                data_norm[data_start:data_end],
+                query_chunk,
+                topk,
+                metric,
+            )
+
+            # store the indices
+            knn_indices_unreduced[
+                query_start:query_end, data_start:data_end
+            ] = knn_indices_chunk
+
+            # store the distances
+            knn_distances_unreduced[
+                query_start:query_end, data_start:data_end
+            ] = knn_distances_chunk
+
+    # reduce the results
+    knn_indices_into_unreduced = torch.topk(
+        knn_distances_unreduced, topk, dim=1, largest=lrgst, sorted=True
+    ).indices
+
+    # get the indices of the nearest neighbors using the topk indices into the unreduced indices
+    knn_indices = knn_indices_unreduced.gather(1, knn_indices_into_unreduced)
+    return knn_indices
 
 
 def knn(
     data: Tensor,
+    data_chunk_size: int,
     query: Tensor,
+    query_chunk_size: int,
     topk: int,
     match_device: torch.device,
-    available_ram_GB: float,
-    distance_metric: str = "euclidean",
+    distance_metric: str = "angular",
     match_dtype: torch.dtype = torch.float16,
 ) -> Tensor:
+    """
+    This function is a wrapper for the brute force KNN algorithm. It splits the
+    data and query into chunks and calls the knn_batch function on each chunk.
+    The results are concatenated, reduced, and returned.
+
+    Args:
+        data (Tensor): The dictionary of patterns to be indexed.
+        data_chunk_size (int): The number of dictioanry patterns to process per batch.
+        query (Tensor): The patterns to be indexed.
+        query_chunk_size (int): The number of experimental patterns to process per batch.
+        topk (int): The number of nearest neighbors to return.
+        match_device (torch.device): The device to use for indexing.
+        available_ram_GB (float): The amount of RAM available for indexing.
+        distance_metric (str, optional): The distance metric to use. Defaults to "euclidean".
+        match_dtype (torch.dtype, optional): The datatype to use for indexing. Defaults to torch.float16.
+
+    Returns:
+        Tensor: The indices of the nearest neighbors.
+
+    """
     # in device
     device_in = data.device
 
-    # find the number of queries that can be processed in a batch
-    n_bytes = torch.tensor([], dtype=match_dtype).element_size()
+    # largest if angular
+    lrgst = True if distance_metric == "angular" else False
 
-    n_data, n_query = data.shape[0], query.shape[0]
+    # shapes
+    n_data = data.shape[0]
+    n_query = query.shape[0]
+
+    # if the query chunk size exceeds the number of queries, set it to the number of queries
+    query_chunk_size = min(query_chunk_size, n_query)
+
+    # if the data chunk size exceeds the number of data, set it to the number of data
+    data_chunk_size = min(data_chunk_size, n_data)
 
     # we can precompute the norms of the data in FP32
     # only used if the metric is euclidean
     data_norm = calc_norm(data.float())
 
-    # cast to matching dtype
+    # cast to matching dtype and device
     data, query = data.to(match_dtype), query.to(match_dtype)
-
-    # send to matching device
     data, query = data.to(match_device), query.to(match_device)
 
-    # estimate the largest reasonable batch size
-    batch_size = int(available_ram_GB * 1e9 / (n_data * n_bytes))
+    # find the number of chunks
+    n_data_chunks = int(n_data / data_chunk_size + 1)
 
-    # make sure there is at least one pattern per batch and that the batch size is
-    # not larger than the number of patterns
-    batch_size = max(1, batch_size)
-    batch_size = min(batch_size, n_query)
+    # get the indices of the nearest neighbors using the topk indices into the unreduced indices
+    knn_indices = knn_batches(
+        data,
+        data_norm,
+        query,
+        torch.arange(0, n_data, data_chunk_size, device=match_device),
+        n_data_chunks,
+        data_chunk_size,
+        torch.arange(0, n_query, query_chunk_size, device=match_device),
+        query_chunk_size,
+        topk,
+        distance_metric,
+        lrgst,
+        match_device,
+        match_dtype,
+    ).to(device_in)
 
-    knn_idxs = []
+    return knn_indices
 
-    pb = progressbar(torch.split(query, batch_size), prefix="{:<20}".format("Indexing"))
 
-    for b in pb:
-        knn_idxs.append(knn_batch(data, data_norm, b, topk, distance_metric))
+def knn_quantized_batches(
+    data: Tensor,
+    query: Tensor,
+    data_chunk_idxs: Tensor,
+    data_chunks_n: int,
+    data_chunk_size: int,
+    query_chunk_idxs: Tensor,
+    query_chunk_size: int,
+    topk: int,
+    lrgst: bool,
+    match_device: torch.device,
+    match_dtype: torch.dtype,
+) -> Tensor:
+    n_query = query.shape[0]
 
-    # concatenate the list of tensors
-    knn_indxs = torch.cat(knn_idxs, dim=0).to(device_in)
+    print(f"Initializing output tensor of shape {n_query, topk * data_chunks_n}")
 
-    return knn_indxs
+    knn_indices_unreduced = torch.empty(
+        (n_query, topk * data_chunks_n),
+        device=match_device,
+        dtype=torch.int64,
+    )
+    knn_distances_unreduced = torch.empty(
+        (n_query, topk * data_chunks_n),
+        device=match_device,
+        dtype=match_dtype,
+    )
+
+    pb = progressbar(
+        query_chunk_idxs,
+        "Indexing",
+    )
+
+    for query_start in pb:
+        # get the query chunk
+        query_end = query_start + query_chunk_size
+        query_chunk = query[query_start:query_end]
+
+        for data_start in data_chunk_idxs:
+            # get the data chunk
+            data_end = data_start + data_chunk_size
+            data_chunk = data[data_start:data_end]
+
+            data_quant_model = quant_model(data_chunk)
+
+            # get the indices of the nearest neighbors
+            knn_distances_chunk, knn_indices_chunk = topk_quant(
+                query_chunk, data_quant_model, topk
+            )
+
+            # store the indices
+            knn_indices_unreduced[
+                query_start:query_end, data_start:data_end
+            ] = knn_indices_chunk
+
+            # store the distances
+            knn_distances_unreduced[
+                query_start:query_end, data_start:data_end
+            ] = knn_distances_chunk
+
+    # reduce the results
+    knn_indices_into_unreduced = torch.topk(
+        knn_distances_unreduced, topk, dim=1, largest=lrgst, sorted=True
+    ).indices
+
+    # get the indices of the nearest neighbors using the topk indices into the unreduced indices
+    knn_indices = knn_indices_unreduced.gather(1, knn_indices_into_unreduced)
+    return knn_indices
 
 
 def knn_quantized(
-    data: Tensor, query: Tensor, topk: int, available_ram_GB: float
+    data: Tensor, data_chunk_size: int, query: Tensor, query_chunk_size: int, topk: int
 ) -> Tensor:
-    # get quantized model (will dynamically rescale data entries and cast to int8)
-    # the output will then be transformed back to the input datatype
-    data_read_for_gemm = quant_model(data)
+    """
+    This function is a wrapper for the brute force KNN algorithm. It splits the
+    data and query into chunks and calls the knn_batch function on each chunk.
+    The results are concatenated, reduced, and returned.
 
-    # find the number of queries that can be processed in a batch
-    n_data, dim, n_query = data.shape[0], data.shape[1], query.shape[0]
-    batch_size = int(available_ram_GB * 1e9 / (n_data * dim))
-    batch_size = max(1, batch_size)
-    batch_size = min(batch_size, n_query)
+    Args:
+        data (Tensor): The dictionary of patterns to be indexed.
+        data_chunk_size (int): The number of dictioanry patterns to process per batch.
+        query (Tensor): The patterns to be indexed.
+        query_chunk_size (int): The number of experimental patterns to process per batch.
+        topk (int): The number of nearest neighbors to return.
 
-    # make sure there is at least one pattern per batch and that the batch size is
-    # not larger than the number of patterns
-    batch_size = max(1, batch_size)
-    batch_size = min(batch_size, n_query)
+    Returns:
+        Tensor: The indices of the nearest neighbors.
 
-    knn_idxs = []
+    """
 
-    pb = progressbar(torch.split(query, batch_size), "Indexing")
+    # in device
+    device_in = data.device
 
-    for b in pb:
-        knn_idxs.append(topk_quant(b, data_read_for_gemm, topk))
-    return torch.cat(knn_idxs, dim=0)
+    # shapes
+    n_data = data.shape[0]
+    n_query = query.shape[0]
+
+    # if the query chunk size exceeds the number of queries, set it to the number of queries
+    query_chunk_size = min(query_chunk_size, n_query)
+
+    # if the data chunk size exceeds the number of data, set it to the number of data
+    data_chunk_size = min(data_chunk_size, n_data)
+
+    # cast to matching dtype and device
+    data, query = data.to(torch.float32), query.to(torch.float32)
+    data, query = data.to(device_in), query.to(device_in)
+
+    # find the number of chunks
+    n_data_chunks = int(n_data / data_chunk_size + 1)
+
+    # get the indices of the nearest neighbors using the topk indices into the unreduced indices
+    knn_indices = knn_quantized_batches(
+        data,
+        query,
+        torch.arange(0, n_data, data_chunk_size, device=device_in),
+        n_data_chunks,
+        data_chunk_size,
+        torch.arange(0, n_query, query_chunk_size, device=device_in),
+        query_chunk_size,
+        topk,
+        True,
+        device_in,
+        torch.float32,
+    ).to(device_in)
+
+    return knn_indices
+
+
+# def knn_quantized(
+#     data: Tensor, query: Tensor, topk: int, available_ram_GB: float
+# ) -> Tensor:
+#     # get quantized model (will dynamically rescale data entries and cast to int8)
+#     # the output will then be transformed back to the input datatype
+#     data_read_for_gemm = quant_model(data)
+
+#     # find the number of queries that can be processed in a batch
+#     n_data, dim, n_query = data.shape[0], data.shape[1], query.shape[0]
+#     batch_size = int(available_ram_GB * 1e9 / (n_data * dim))
+#     batch_size = max(1, batch_size)
+#     batch_size = min(batch_size, n_query)
+
+#     # make sure there is at least one pattern per batch and that the batch size is
+#     # not larger than the number of patterns
+#     batch_size = max(1, batch_size)
+#     batch_size = min(batch_size, n_query)
+
+#     knn_idxs = []
+
+#     pb = progressbar(torch.split(query, batch_size), "Indexing")
+
+#     for b in pb:
+#         knn_idxs.append(topk_quant(b, data_read_for_gemm, topk))
+#     return torch.cat(knn_idxs, dim=0)
