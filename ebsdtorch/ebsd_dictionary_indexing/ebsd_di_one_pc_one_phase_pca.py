@@ -30,19 +30,11 @@ from ebsdtorch.patterns.pattern_projection import (
     detector_coords_to_ksphere_via_pc,
 )
 
-from ebsdtorch.ebsd_dictionary_indexing.utils_covariance_matrix import (
-    OnlineCovMatrix,
-    ApproxOnlineCovMatrix,
-)
-from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import (
-    knn,
-    knn_quantized,
-)
+from ebsdtorch.ebsd_dictionary_indexing.utils_covariance_matrix import OnlineCovMatrix
+from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
 
-from ebsdtorch.s2_and_so3.laue import (
-    so3_sample_fz_laue,
-)
+from ebsdtorch.s2_and_so3.laue import so3_sample_fz_laue
 
 
 def _detector_covmat(
@@ -52,20 +44,13 @@ def _detector_covmat(
     so3_samples_fz: Tensor,
     batch_size: int,
     correlation: bool = False,
-    approx: bool = False,
 ) -> Tensor:
     # n_pixels is same as the direction cosines -2 dimension
     n_pixels = detector_cosines.shape[-2]
 
-    # initialize the running covariance matrix
-    if approx:
-        running_covmat = ApproxOnlineCovMatrix(n_pixels, correlation=correlation).to(
-            master_pattern_MSLNH.device
-        )
-    else:
-        running_covmat = OnlineCovMatrix(n_pixels, correlation=correlation).to(
-            master_pattern_MSLNH.device
-        )
+    running_covmat = OnlineCovMatrix(n_pixels, correlation=correlation).to(
+        master_pattern_MSLNH.device
+    )
 
     # loop over the batches of orientations and project the patterns
     pb = progressbar(
@@ -202,7 +187,7 @@ class EBSDDIwithPCA(torch.nn.Module):
     def compute_PCA_detector_plane(
         self,
         so3_n_samples: int = 300000,
-        so3_batch_size: int = 512,
+        so3_batch_size: int = 10000,
         correlation: bool = False,
     ) -> None:
         """
@@ -297,11 +282,12 @@ class EBSDDIwithPCA(torch.nn.Module):
         n_pca_components: int,
         topk: int,
         match_device: torch.device,
-        target_VRAM_GB: float = 0.25,
-        target_RAM_GB: float = 8.0,
-        metric: str = "euclidean",
+        metric: str = "angular",
+        data_chunk_size: int = 32768,
+        query_chunk_size: int = 4096,
         match_dtype: torch.dtype = torch.float16,
         override_quantization: bool = True,
+        subtract_mean: bool = True,
     ) -> Tensor:
         """
         Index the experimental data. The experimental data is first projected onto the PCA
@@ -313,10 +299,12 @@ class EBSDDIwithPCA(torch.nn.Module):
             n_pca_components: number of PCA components to use for this indexing
             topk: number of nearest neighbors to return
             match_device: device to use for the distance calculations
-            target_ram_allocation_GB: target RAM allocation in GB
-            metric: distance metric to use. One of "euclidean", "manhattan", "angular", "hyperbolic"
+            metric: distance metric to use. Can be "angular" or "euclidean" or "manhattan"
+            data_chunk_size: number of dictionary patterns to use per chunk
+            query_chunk_size: number of experimental patterns to use per chunk
             match_dtype: dtype to use for the distance calculations
-            override_quantization: if True, force quantized calculations for dictionaries on the CPU
+            override_quantization: if True, force quantized when on the CPU
+            subtract_mean: if True, subtract the mean from each **masked** pattern (if not already done)
 
         Returns:
             indexed dataset of shape (n_patterns, k) with k as the index into self.so3_samples_fz
@@ -346,9 +334,10 @@ class EBSDDIwithPCA(torch.nn.Module):
             experimental_data = experimental_data[:, self.signal_mask]
 
         # subtract the per pattern mean
-        experimental_data = experimental_data - torch.mean(
-            experimental_data, dim=1, keepdims=True
-        )
+        if subtract_mean:
+            experimental_data = experimental_data - torch.mean(
+                experimental_data, dim=1, keepdims=True
+            )
 
         # project the experimental dataset onto the PCA components
         projected_dataset = torch.matmul(
@@ -357,23 +346,17 @@ class EBSDDIwithPCA(torch.nn.Module):
 
         # if the projected dataset is on the CPU, use the quantized version
         # and force the usage of angular distance
-        if override_quantization and match_device == torch.device("cpu"):
-            indices = knn_quantized(
-                data=self.dictionary_pca_loadings[:, -n_pca_components:].float().cpu(),
-                query=projected_dataset.float().cpu(),
-                topk=topk,
-                available_ram_GB=target_RAM_GB,
-            )
-        else:
-            indices = knn(
-                data=self.dictionary_pca_loadings[:, -n_pca_components:],
-                query=projected_dataset,
-                topk=topk,
-                available_ram_GB=target_VRAM_GB,
-                distance_metric=metric,
-                match_dtype=match_dtype,
-                match_device=match_device,
-            )
+        indices = knn(
+            data=self.dictionary_pca_loadings[:, -n_pca_components:],
+            query=projected_dataset,
+            data_chunk_size=data_chunk_size,
+            query_chunk_size=query_chunk_size,
+            topk=topk,
+            distance_metric=metric,
+            match_dtype=match_dtype,
+            match_device=match_device,
+            quantized=(override_quantization and match_device == torch.device("cpu")),
+        )
         return indices
 
     def lookup_orientations(
@@ -391,105 +374,3 @@ class EBSDDIwithPCA(torch.nn.Module):
 
         """
         return self.so3_samples_fz[indices]
-
-
-# # test it out
-# import kikuchipy as kp
-# import matplotlib.pyplot as plt
-
-
-# device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
-# print(f"Using device: {device}")
-# # device = torch.device("cpu")
-
-# # get the example dataset
-# s = kp.load("../datafolder/EBSD_Hakon_Ni/scan10/Pattern.dat")
-
-# # find the covariance matrix for the example dataset in KikuchiPy
-# patterns = s.data.reshape(-1, 60 * 60)
-# patterns = torch.from_numpy(patterns).to(torch.float32).to(device)
-
-# # subtract static background
-# patterns = patterns - torch.mean(patterns, dim=0)[None, :]
-
-# # get the master pattern
-# mp = kp.data.nickel_ebsd_master_pattern_small(projection="lambert", hemisphere="both")
-# ni = mp.phase
-# mLPNH = mp.data[0, :, :]
-# mLPSH = mp.data[1, :, :]
-
-# # get the signal mask
-# signal_mask = kp.filters.Window("circular", (60, 60)).astype(bool).reshape(-1)
-# signal_mask = torch.from_numpy(signal_mask).to(torch.bool).to(device)
-
-# # to torch tensor
-# mLPNH = torch.from_numpy(mLPNH).to(torch.float32).to(device)
-# mLPSH = torch.from_numpy(mLPSH).to(torch.float32).to(device)
-
-# # normalize each master pattern to 0 to 1
-# mLPNH = (mLPNH - torch.min(mLPNH)) / (torch.max(mLPNH) - torch.min(mLPNH))
-# mLPSH = (mLPSH - torch.min(mLPSH)) / (torch.max(mLPSH) - torch.min(mLPSH))
-
-# with torch.no_grad():
-#     ebsd = EBSDDIwithPCA(
-#         laue_group=11,
-#         master_pattern_MSLNH=mLPNH,
-#         master_pattern_MSLSH=mLPSH,
-#         pattern_center=(0.4221, 0.2179, 0.4954),
-#         detector_height=60,
-#         detector_width=60,
-#         detector_tilt_deg=0.0,
-#         azimuthal_deg=0.0,
-#         sample_tilt_deg=70.0,
-#         signal_mask=signal_mask,
-#     ).to(device)
-
-#     ebsd.compute_PCA_detector_plane(
-#         so3_n_samples=100000,
-#         so3_batch_size=10000,
-#         correlation=False,
-#     )
-
-#     ebsd.project_dictionary_pca(
-#         pca_n_max_components=2000,
-#         so3_n_samples=300000,
-#         so3_batch_size=10000,
-#     )
-
-# # time it
-# import time
-
-# start = time.time()
-
-# indices = ebsd.pca_di_patterns(
-#     experimental_data=patterns,
-#     n_pca_components=1000,
-#     match_device=device,
-#     topk=1,
-#     target_VRAM_GB=0.25,
-#     target_RAM_GB=4.0,
-#     metric="angular",
-#     match_dtype=torch.float16,
-# )
-
-# duration = time.time() - start
-
-# print(f"Patterns per second: {len(patterns) / duration}")
-
-# fz_quats_indexed = ebsd.lookup_orientations(indices)
-
-# from orix import plot
-# from orix.vector import Vector3d
-# from orix.quaternion import Orientation
-
-# pg_m3m = ni.point_group.laue
-
-# # Orientation colors
-# ckey_m3m = plot.IPFColorKeyTSL(ni.point_group, direction=Vector3d.zvector())
-
-# orientations = Orientation(fz_quats_indexed.cpu().numpy())
-# rgb = ckey_m3m.orientation2color(orientations)
-
-# plt.imshow(rgb.reshape(s.data.shape[0], s.data.shape[1], 3))
-# plt.savefig("scratch/fz_quat_colors.png")

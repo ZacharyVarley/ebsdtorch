@@ -30,11 +30,7 @@ from ebsdtorch.patterns.pattern_projection import (
     detector_coords_to_ksphere_via_pc,
 )
 
-from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import (
-    knn,
-    knn_quantized,
-)
-
+from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
 
 from ebsdtorch.s2_and_so3.laue import (
@@ -49,6 +45,7 @@ def _project_dictionary(
     so3_samples_fz: Tensor,
     batch_size: int,
     subtract_mean: bool = True,
+    out_dtype: torch.dtype = torch.float16,
 ) -> Tensor:
     # list of patterns batches
     patterns = []
@@ -73,7 +70,7 @@ def _project_dictionary(
         if subtract_mean:
             patterns_batch = patterns_batch - torch.mean(patterns_batch, dim=1)[:, None]
 
-        patterns.append(patterns_batch)
+        patterns.append(patterns_batch.to(out_dtype))
 
     return torch.cat(patterns, dim=0)
 
@@ -111,6 +108,7 @@ class EBSDDI(torch.nn.Module):
                 the modified square Lambert projected master pattern in the northern hemisphere
             master_pattern_MSLSH: torch tensor of shape (n_pixels, n_pixels) containing
                 the modified square Lambert projected master pattern in the southern hemisphere
+            pattern_center: pattern center in pixels given in Kikuchipy convention
             detector_height: height of the detector in pixels
             detector_width: width of the detector in pixels
             s2_n_samples: number of points to use on the fundamental sector of S2
@@ -146,7 +144,8 @@ class EBSDDI(torch.nn.Module):
         so3_n_samples: int = 300000,
         so3_batch_size: int = 512,
         subtract_mean: bool = True,
-    ) -> None:
+        storage_dtype: torch.dtype = torch.float16,
+    ):
         """
         Compute the PCA decomposition of the detector plane.
 
@@ -182,7 +181,7 @@ class EBSDDI(torch.nn.Module):
         # save the orientations for lookup
         self.register_buffer("so3_samples_fz", so3_samples_fz)
 
-        # do the projection
+        # project the dictionary onto the detector plane
         patterns = _project_dictionary(
             master_pattern_MSLNH=self.master_pattern_MSLNH,
             master_pattern_MSLSH=self.master_pattern_MSLSH,
@@ -190,6 +189,7 @@ class EBSDDI(torch.nn.Module):
             so3_samples_fz=so3_samples_fz,
             batch_size=so3_batch_size,
             subtract_mean=subtract_mean,
+            out_dtype=storage_dtype,
         )
 
         # save the patterns
@@ -200,9 +200,9 @@ class EBSDDI(torch.nn.Module):
         experimental_data: Tensor,
         topk: int,
         match_device: torch.device,
-        target_VRAM_GB: float = 0.25,
-        target_RAM_GB: float = 8.0,
         metric: str = "angular",
+        data_chunk_size: int = 32768,
+        query_chunk_size: int = 4096,
         match_dtype: torch.dtype = torch.float16,
         override_quantization: bool = True,
         subtract_mean: bool = True,
@@ -213,18 +213,15 @@ class EBSDDI(torch.nn.Module):
 
         Args:
             experimental_data: experimental dataset of shape (n_patterns, n_pixels)
-            n_pca_components: number of PCA components to use for this indexing
             topk: number of nearest neighbors to return
             match_device: device to use for the matching
-            target_VRAM_GB: target amount of VRAM to use in GB
-            target_RAM_GB: target amount of RAM to use in GB
             metric: distance metric to use for the nearest neighbor search
-            match_dtype: datatype to use for the matching. This is useful for
-                reducing the memory footprint of the matching. For example,
-                if the patterns are float32, then using float16 for the matching
-                will reduce the memory footprint by 2x.
+            data_chunk_size: number of dictionary patterns to process per batch
+            query_chunk_size: number of experimental patterns to process per batch
+            match_dtype: datatype to use for the matching
             override_quantization: if True, force the usage of quantized distance
-                calculations on the CPU. This is useful if you don't have a GPU.
+                calculations on x86 CPUs. This is useful if you don't have a GPU.
+                If you are using Apple Silicon, use the torch.device("mps") for GPU.
 
         Returns:
             indexed dataset of shape (n_patterns, k) with k as the index into self.so3_samples_fz
@@ -241,30 +238,17 @@ class EBSDDI(torch.nn.Module):
                 experimental_data, dim=1, keepdims=True
             )
 
-        # if the projected dataset is on the CPU, use the quantized version
-        # and force the usage of angular distance
-        if override_quantization and match_device == torch.device("cpu"):
-            print("Using quantized distance on the CPU")
-            self.patterns = self.patterns.cpu()
-            experimental_data = experimental_data.cpu()
-            indices = knn_quantized(
-                data=self.patterns,
-                data_chunk_size=16384,
-                query=experimental_data,
-                query_chunk_size=16384,
-                topk=topk,
-            )
-        else:
-            indices = knn(
-                data=self.patterns,
-                data_chunk_size=32768,
-                query=experimental_data,
-                query_chunk_size=4096,
-                topk=topk,
-                distance_metric=metric,
-                match_dtype=match_dtype,
-                match_device=match_device,
-            )
+        indices = knn(
+            data=self.patterns,
+            query=experimental_data,
+            data_chunk_size=data_chunk_size,
+            query_chunk_size=query_chunk_size,
+            topk=topk,
+            distance_metric=metric,
+            match_dtype=match_dtype,
+            match_device=match_device,
+            quantized=(override_quantization and match_device == torch.device("cpu")),
+        )
         return indices
 
     def lookup_orientations(
@@ -282,95 +266,3 @@ class EBSDDI(torch.nn.Module):
 
         """
         return self.so3_samples_fz[indices]
-
-
-# # test it out
-# import kikuchipy as kp
-# import matplotlib.pyplot as plt
-
-
-# device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-# # device = torch.device("cpu")
-
-# # get the example dataset
-# s = kp.load("../datafolder/EBSD_Hakon_Ni/scan10/Pattern.dat")
-
-# # find the covariance matrix for the example dataset in KikuchiPy
-# patterns = s.data.reshape(-1, 60 * 60)
-# patterns = torch.from_numpy(patterns).to(torch.float32).to(device)
-
-# # subtract static background
-# patterns = patterns - torch.mean(patterns, dim=0)[None, :]
-
-# # get the master pattern
-# mp = kp.data.nickel_ebsd_master_pattern_small(projection="lambert", hemisphere="both")
-# ni = mp.phase
-# mLPNH = mp.data[0, :, :]
-# mLPSH = mp.data[1, :, :]
-
-# # get the signal mask
-# signal_mask = kp.filters.Window("circular", (60, 60)).astype(bool).reshape(-1)
-# signal_mask = torch.from_numpy(signal_mask).to(torch.bool).to(device)
-
-# # to torch tensor
-# mLPNH = torch.from_numpy(mLPNH).to(torch.float32).to(device)
-# mLPSH = torch.from_numpy(mLPSH).to(torch.float32).to(device)
-
-# # normalize each master pattern to 0 to 1
-# mLPNH = (mLPNH - torch.min(mLPNH)) / (torch.max(mLPNH) - torch.min(mLPNH))
-# mLPSH = (mLPSH - torch.min(mLPSH)) / (torch.max(mLPSH) - torch.min(mLPSH))
-
-# with torch.no_grad():
-#     ebsd = EBSDDI(
-#         laue_group=11,
-#         master_pattern_MSLNH=mLPNH,
-#         master_pattern_MSLSH=mLPSH,
-#         pattern_center=(0.4221, 0.2179, 0.4954),
-#         detector_height=60,
-#         detector_width=60,
-#         detector_tilt_deg=0.0,
-#         azimuthal_deg=0.0,
-#         sample_tilt_deg=70.0,
-#         signal_mask=signal_mask,
-#     ).to(device)
-
-#     ebsd.project_dictionary(
-#         so3_n_samples=100000,
-#         so3_batch_size=10000,
-#     )
-
-# # time it
-# import time
-
-# start = time.time()
-
-# indices = ebsd.di_patterns(
-#     experimental_data=patterns,
-#     topk=1,
-#     match_device=device,
-#     target_VRAM_GB=0.25,
-#     target_RAM_GB=4.0,
-#     metric="angular",
-#     match_dtype=torch.float16,
-# )
-
-# duration = time.time() - start
-
-# print(f"Patterns per second: {len(patterns) / duration}")
-
-# fz_quats_indexed = ebsd.lookup_orientations(indices)
-
-# from orix import plot
-# from orix.vector import Vector3d
-# from orix.quaternion import Orientation
-
-# pg_m3m = ni.point_group.laue
-
-# # Orientation colors
-# ckey_m3m = plot.IPFColorKeyTSL(ni.point_group, direction=Vector3d.zvector())
-
-# orientations = Orientation(fz_quats_indexed.cpu().numpy())
-# rgb = ckey_m3m.orientation2color(orientations)
-
-# plt.imshow(rgb.reshape(s.data.shape[0], s.data.shape[1], 3))
-# plt.savefig("scratch/fz_quat_colors.png")
