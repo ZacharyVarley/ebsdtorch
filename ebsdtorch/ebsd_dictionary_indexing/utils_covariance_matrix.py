@@ -30,8 +30,8 @@ def update_covmat(
     new_mean = (current_mean * current_obs + batch_mean * N) / (current_obs + N)
 
     # compute the deltas
-    delta = (data_new - current_mean).to(delta_dtype)
-    delta_prime = (data_new - new_mean).to(delta_dtype)
+    delta = data_new.to(delta_dtype) - (current_mean).to(delta_dtype)
+    delta_prime = data_new.to(delta_dtype) - (new_mean).to(delta_dtype)
 
     # update the running covariance matrix
     current_covmat += torch.einsum("ij,ik->jk", delta, delta_prime).to(
