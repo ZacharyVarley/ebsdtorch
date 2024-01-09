@@ -1,6 +1,12 @@
 import numpy as np
 from spherical import Wigner
 
+"""
+The package spherical uses a better recursion algorithm than Fukushima's.
+
+
+"""
+
 
 test_parameters = [
     (365, 102, 20, -4.23570250037880395095020243575390e-02, 8161.0 / 16384.0),
