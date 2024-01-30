@@ -8,7 +8,9 @@ patterns. It is designed to be fast and easy to use.
 To install ebsdtorch, first install PyTorch, then run this command in your
 terminal:
 
-```bash pip install ebsdtorch ```
+```bash
+pip install ebsdtorch
+```
 
 ## Features (and TODOs)
 
