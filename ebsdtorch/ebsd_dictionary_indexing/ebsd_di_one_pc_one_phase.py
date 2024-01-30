@@ -25,17 +25,10 @@ from typing import Tuple
 import torch
 from torch import Tensor
 
-from ebsdtorch.patterns.pattern_projection import (
-    project_pattern_single_geometry,
-    detector_coords_to_ksphere_via_pc,
-)
-
+from ebsdtorch.patterns.pattern_projection import project_patterns, average_pc_geometry
 from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
-
-from ebsdtorch.s2_and_so3.laue import (
-    so3_sample_fz_laue,
-)
+from ebsdtorch.s2_and_so3.laue import so3_sample_fz_laue
 
 
 def _project_dictionary(
@@ -59,7 +52,7 @@ def _project_dictionary(
     for so3_samples_fz_batch in pb:
         # get the values of the master pattern at the rotated points over FZ
         # this is a (N_so3, N_s2) tensor, our "data matrix"
-        patterns_batch = project_pattern_single_geometry(
+        patterns_batch = project_patterns(
             master_pattern_MSLNH=master_pattern_MSLNH,
             master_pattern_MSLSH=master_pattern_MSLSH,
             quaternions=so3_samples_fz_batch,
@@ -111,11 +104,10 @@ class EBSDDI(torch.nn.Module):
             pattern_center: pattern center in pixels given in Kikuchipy convention
             detector_height: height of the detector in pixels
             detector_width: width of the detector in pixels
-            s2_n_samples: number of points to use on the fundamental sector of S2
-            so3_n_samples: number of samples to use on the fundamental zone of SO3
-            so3_batch_size: number of samples to use per batch when calculating the covariance matrix
-            correlation: if True, return the correlation matrix instead of the covariance matrix. We
-                expect that the pixels vary with comparable variance so the covariance matrix is sufficient.
+            detector_tilt_deg: detector tilt from horizontal in degrees
+            azimuthal_deg: sample tilt about the sample RD axis in degrees
+            sample_tilt_deg: sample tilt from horizontal in degrees
+            signal_mask: mask to apply to the experimental data. If None, no mask is applied.
 
         """
         super().__init__()
@@ -152,13 +144,13 @@ class EBSDDI(torch.nn.Module):
         Args:
             so3_n_samples: number of samples to use on the fundamental zone of SO3
             so3_batch_size: number of samples to use per batch when calculating the covariance matrix
-            correlation: if True, return the correlation matrix instead of the covariance matrix. We
-                expect that the pixels vary with comparable variance so the covariance matrix is sufficient.
+            subtract_mean: if True, subtract the mean from each pattern
+            storage_dtype: datatype to use for the storage of the patterns. Default is float16.
 
         """
 
         # get the direction cosines for each detector pixel
-        detector_cosines = detector_coords_to_ksphere_via_pc(
+        detector_cosines = average_pc_geometry(
             pcs=self.pattern_center,
             n_rows=self.detector_height,
             n_cols=self.detector_width,
@@ -177,6 +169,8 @@ class EBSDDI(torch.nn.Module):
             target_n_samples=so3_n_samples,
             device=detector_cosines.device,
         )
+
+        print(f"Targeted {so3_n_samples} samples, and received {len(so3_samples_fz)}")
 
         # save the orientations for lookup
         self.register_buffer("so3_samples_fz", so3_samples_fz)
@@ -220,8 +214,8 @@ class EBSDDI(torch.nn.Module):
             query_chunk_size: number of experimental patterns to process per batch
             match_dtype: datatype to use for the matching
             override_quantization: if True, force the usage of quantized distance
-                calculations on x86 CPUs. This is useful if you don't have a GPU.
-                If you are using Apple Silicon, use the torch.device("mps") for GPU.
+                calculations on CPUs. This is useful if you don't have a GPU.
+                If you are using Apple Silicon, use torch.device("mps") instead.
 
         Returns:
             indexed dataset of shape (n_patterns, k) with k as the index into self.so3_samples_fz

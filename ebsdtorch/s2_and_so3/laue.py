@@ -1,16 +1,15 @@
 """
 
-This file implements functions for moving points on the 2-sphere and unit
-quaternions to the arbitrarily chosen unique set of points / orientations under
-the symmetry of one of the given Laue groups.
-
-Quaternion operators for the Laue groups were taken from the following paper:
+This file implements operations for points on the 2-sphere and unit quaternions
+under a given Laue group. Quaternion operators for the Laue groups were taken
+from the following paper:
 
 Larsen, Peter Mahler, and Søren Schmidt. "Improved orientation sampling for
 indexing diffraction patterns of polycrystalline materials." Journal of Applied
 Crystallography 50, no. 6 (2017): 1571-1582.
 
 """
+
 import torch
 from torch import Tensor
 
@@ -23,15 +22,14 @@ from ebsdtorch.s2_and_so3.orientations import (
     norm_standard_quaternion,
     xyz_to_theta_phi,
 )
-
 from ebsdtorch.s2_and_so3.sampling import so3_cubochoric_grid, s2_fibonacci_lattice
 
 
 @torch.jit.script
 def get_laue_mult(laue_group: int) -> int:
     """
-    This function returns the multiplicity of the Laue group specified by the
-    laue_group parameter. The ordering of the Laue groups is as follows:
+    Find multiplicity of a given Laue group (including inversion). The ordering
+    of the Laue groups is as follows:
 
     1. C1
     2. C2
@@ -73,9 +71,8 @@ def get_laue_mult(laue_group: int) -> int:
 @torch.jit.script
 def laue_elements(laue_id: int) -> Tensor:
     """
-    This function returns the elements of the Laue group specified by the
-    laue_id parameter. The elements are returned as a tensor of shape
-    (cardinality, 4) where the first element is always the identity.
+    Find operators (excluding inversion) of the Laue group specified by the
+    laue_id parameter. The first element is always the identity.
 
     Args:
         laue_id: integer between inclusive [1, 11]
@@ -94,6 +91,13 @@ def laue_elements(laue_id: int) -> Tensor:
 
     Returns:
         torch tensor of shape (cardinality, 4) containing the elements of the
+
+
+    Notes:
+
+    https://en.wikipedia.org/wiki/Space_group
+
+    https://pd.chem.ucl.ac.uk/pdnn/symm3/allsgp.htm
 
     """
 
@@ -285,6 +289,32 @@ def so3_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     output = quaternion_multiply(quats.reshape(N, 4), laue_group[row_maximum_indices])
 
     return output.reshape(data_shape)
+
+
+@torch.jit.script
+def so3_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
+    """
+    Return the equivalent quaternions under the given Laue group.
+
+    Args:
+        quats: quaternions to move to fundamental zone of shape (..., 4)
+        laue_id: laue group of quaternions to move to fundamental zone
+
+    Returns:
+        Slices of equivalent quaternions of shape (..., |laue_group|, 4)
+
+    """
+    # get the important shapes
+    data_shape = quats.shape
+    N = torch.prod(torch.tensor(data_shape[:-1]))
+    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
+
+    # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
+    equivalent_quaternions = quaternion_multiply(
+        quats.reshape(N, 1, 4), laue_group.reshape(-1, 4)
+    )
+
+    return equivalent_quaternions.reshape(data_shape[:-1] + (len(laue_group), 4))
 
 
 @torch.jit.script
@@ -498,9 +528,8 @@ def so3_sample_fz_laue(
 
     A function to sample the fundamental zone of SO(3) for a given Laue group.
     This function uses the cubochoric grid sampling method, although other methods
-    could be used. A slight oversampling is used to ensure that the number of
-    samples closest to the target number of samples is used, as rejection sampling
-    is used here.
+    could be used. Rejection sampling is used so the number of samples will almost
+    certainly be different than the target number of samples.
 
     Args:
         laue_id: integer between 1 and 11 inclusive
@@ -515,12 +544,10 @@ def so3_sample_fz_laue(
     laue_mult = get_laue_mult(laue_id)
 
     # multiply by half the Laue multiplicity (inversion is not included in the operators)
-    required_oversampling = (
-        torch.tensor([int(target_n_samples * 1.018)]) * 0.5 * laue_mult
-    )
+    required_oversampling = target_n_samples * 0.5 * laue_mult
 
     # take the cube root to get the edge length
-    edge_length = int(torch.ceil(torch.pow(required_oversampling, 1 / 3)))
+    edge_length = int(required_oversampling ** (1.0 / 3.0))
     so3_samples = so3_cubochoric_grid(edge_length, device=device)
 
     # reject the points that are not in the fundamental zone
@@ -533,8 +560,53 @@ def so3_sample_fz_laue(
 
 
 @torch.jit.script
+def so3_sample_fz_laue_angle(
+    laue_id: int,
+    target_mean_disorientation: float,
+    device: torch.device,
+    permute: bool = True,
+) -> Tensor:
+    """
+
+    A function to sample the fundamental zone of SO(3) for a given Laue group.
+    This function uses the cubochoric grid sampling method, although other methods
+    could be used. A slight oversampling is used to ensure that the number of
+    samples closest to the target number of samples is used, as rejection sampling
+    is used here.
+
+    Args:
+        laue_id: integer between 1 and 11 inclusive
+        target_mean_disorientation: target mean disorientation in radians
+        device: torch device to use
+        permute: whether or not to randomly permute the samples
+
+    Returns:
+        torch tensor of shape (n_samples, 4) containing the sampled orientations
+
+    """
+    # get the multiplicity of the laue group
+    laue_mult = get_laue_mult(laue_id)
+
+    # use empirical fit to get the number of samples
+    n_so3_without_symmetry = (
+        2 * (131.97049) / (target_mean_disorientation - 0.03732) + 1
+    ) ** 3
+    edge_length = int((n_so3_without_symmetry / (0.5 * laue_mult)) ** (1.0 / 3.0) + 1.0)
+    so3_samples = so3_cubochoric_grid(edge_length, device=device)
+
+    # reject the points that are not in the fundamental zone
+    so3_samples_fz = so3_samples[so3_in_fz_laue(so3_samples, laue_id)]
+
+    # randomly permute the samples
+    if permute:
+        so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
+
+    return so3_samples_fz
+
+
+@torch.jit.script
 def s2_sample_fz_laue(
-    laue_group: int,
+    laue_id: int,
     target_n_samples: int,
     device: torch.device,
 ) -> Tensor:
@@ -547,7 +619,7 @@ def s2_sample_fz_laue(
     is used here.
 
     Args:
-        laue_group: integer between 1 and 11 inclusive
+        laue_id: integer between 1 and 11 inclusive
         target_n_samples: number of samples to use on the fundamental sector of S2
         device: torch device to use
 
@@ -556,13 +628,13 @@ def s2_sample_fz_laue(
 
     """
 
-    laue_mult = get_laue_mult(laue_group)
+    laue_mult = get_laue_mult(laue_id)
 
     # get the sampling locations on the fundamental sector of S2
     s2_samples = s2_fibonacci_lattice(target_n_samples * laue_mult, device=device)
 
     # filter out all but the S2 fundamental sector of the laue group
-    s2_samples_fz = s2_samples[s2_in_fz_laue(s2_samples, laue_group)]
+    s2_samples_fz = s2_samples[s2_in_fz_laue(s2_samples, laue_id)]
 
     return s2_samples_fz
 

@@ -35,6 +35,13 @@ from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
 
 
 class LinearLayer(Module):
+    """
+    This is a wrapper around torch.nn.Linear defines a no bias linear layer
+    model. The 8-bit quantized arithmetic libraries take neural networks as
+    inputs. This allows us to quantize a simple matrix multiplication.
+
+    """
+
     def __init__(self, in_dim: int, out_dim: int):
         super(LinearLayer, self).__init__()
         self.fc = Linear(in_dim, out_dim, bias=False)

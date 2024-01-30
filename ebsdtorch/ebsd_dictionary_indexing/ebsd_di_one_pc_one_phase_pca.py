@@ -1,23 +1,9 @@
 """
-This implements an EBSDDIwithPCA class that can be used to perform EBSD
-dictionary indexing of patterns using PCA. The class is designed to be used with
-a single pattern center and a single detector geometry, which is the
-conventional approach for EBSD. In the future, I will add support for fitting
-the actual detector geometry, as has been done for LabDCT. This should be
-straightforward to implement but requires me to port Spherical Indexing and
-generalized spherical harmonics into PyTorch. I need to do the indexing on the
-sphere becuase I am face with two choices:
-
-1. Project the patterns onto the detector plane and then index them. This
-requires a reprojection of the dictionary for each pattern on the sample
-surface. This is slow because the dictionary is large and the reprojection is
-expensive.
-
-2. Index the patterns on the sphere. This requires a reprojection of the
-experimental patterns onto the sphere, followed by an expensive evaluation of
-the quality of the best possible match over orientation space. This is still
-cheaper than dictionary reprojection.
-
+This file implements dictionary indexing of EBSD patterns using PCA. The class
+is designed to be used with a single pattern center and a single detector
+geometry, which is the conventional approach for EBSD. In the future, I will add
+support for fitting the actual detector geometry, as has been done for other
+diffraction based imaging settings. 
 
 """
 
@@ -26,14 +12,12 @@ import torch
 from torch import Tensor
 
 from ebsdtorch.patterns.pattern_projection import (
-    project_pattern_single_geometry,
-    detector_coords_to_ksphere_via_pc,
+    project_patterns,
+    average_pc_geometry,
 )
-
 from ebsdtorch.ebsd_dictionary_indexing.utils_covariance_matrix import OnlineCovMatrix
 from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
-
 from ebsdtorch.s2_and_so3.laue import so3_sample_fz_laue
 
 
@@ -61,7 +45,7 @@ def _detector_covmat(
     for so3_samples_fz_batch in pb:
         # get the values of the master pattern at the rotated points over FZ
         # this is a (N_so3, N_s2) tensor, our "data matrix"
-        patterns = project_pattern_single_geometry(
+        patterns = project_patterns(
             master_pattern_MSLNH=master_pattern_MSLNH,
             master_pattern_MSLSH=master_pattern_MSLSH,
             quaternions=so3_samples_fz_batch,
@@ -101,7 +85,7 @@ def _dictionary_pca_loadings(
 
     for so3_samples_fz_batch in pb:
         # this is a (N_so3_batch, N_pixels) tensor, our "data matrix"
-        patterns = project_pattern_single_geometry(
+        patterns = project_patterns(
             master_pattern_MSLNH=master_pattern_MSLNH,
             master_pattern_MSLSH=master_pattern_MSLSH,
             quaternions=so3_samples_fz_batch,
@@ -202,7 +186,7 @@ class EBSDDIwithPCA(torch.nn.Module):
         """
 
         # get the direction cosines for each detector pixel
-        detector_cosines = detector_coords_to_ksphere_via_pc(
+        detector_cosines = average_pc_geometry(
             pcs=self.pattern_center,
             n_rows=self.detector_height,
             n_cols=self.detector_width,
@@ -218,6 +202,8 @@ class EBSDDIwithPCA(torch.nn.Module):
             target_n_samples=so3_n_samples,
             device=detector_cosines.device,
         )
+
+        print(f"Targeted {so3_n_samples} samples, and received {len(so3_samples_fz)}")
 
         # do the covariance matrix calculation
         covmat = _detector_covmat(

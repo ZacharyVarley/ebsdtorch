@@ -1,2 +1,4 @@
 from .ebsd_di_one_pc_one_phase import EBSDDI
 from .ebsd_di_one_pc_one_phase_pca import EBSDDIwithPCA
+from .blur_master_pattern_direct import annulus_bse_detector
+from .ebsd_di_spherical_covmat import EBSDCovmatKSphere

@@ -13,7 +13,7 @@ from ebsdtorch.s2_and_so3.orientations import quaternion_apply
 
 
 @torch.jit.script
-def detector_coords_to_ksphere_via_pc(
+def average_pc_geometry(
     pcs: Tensor,
     n_rows: int,
     n_cols: int,
@@ -107,7 +107,7 @@ def detector_coords_to_ksphere_via_pc(
 
 
 @torch.jit.script
-def project_pattern_single_geometry(
+def project_patterns(
     master_pattern_MSLNH: Tensor,
     master_pattern_MSLSH: Tensor,
     quaternions: Tensor,
