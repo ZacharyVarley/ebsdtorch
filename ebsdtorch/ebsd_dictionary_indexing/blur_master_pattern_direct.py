@@ -48,7 +48,9 @@ def annulus_bse_detector(
 
     """
     # sample points on the sphere used for integration - returned as (n, 3) xyz coordinates
-    s2_points = s2_fibonacci_lattice(n_s2_points).double().to(square_lambert_mp.device)
+    s2_points = s2_fibonacci_lattice(
+        n_s2_points, device=square_lambert_mp.device
+    ).double()
 
     # convert xyz coordinates to latitude and longitude
     theta_phi_pts = xyz_to_theta_phi(s2_points).double()
