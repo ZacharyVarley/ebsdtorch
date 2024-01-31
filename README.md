@@ -1,5 +1,10 @@
 # ebsdtorch
 
+[![PyPI version](https://badge.fury.io/py/ebsdtorch.svg)](https://badge.fury.io/py/ebsdtorch)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
+![PyPI - License](https://img.shields.io/pypi/l/ebsdtorch) 
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
+
 PyTorch-only Python library for analyzing electron backscatter diffraction (EBSD)
 patterns. It is designed to be fast and easy to use.
 
