@@ -378,6 +378,75 @@ def disori_angle(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
+def disorientation(quats1: Tensor, quats2: Tensor, laue_id_1: int, laue_id_2: int):
+    """
+
+    Return the disorientation quaternion between the given quaternions.
+
+    Args:
+        quats1: quaternions of shape (..., 4)
+        quats2: quaternions of shape (..., 4)
+        laue_id_1: laue group ID of quats1
+        laue_id_2: laue group ID of quats2
+
+    Returns:
+        disorientation quaternion of shape (..., 4)
+
+    """
+
+    # get the important shapes
+    data_shape = quats1.shape
+
+    # check that the shapes are the same
+    if data_shape != quats2.shape:
+        raise ValueError(
+            f"quats1 and quats2 must have the same data shape, but got {data_shape} and {quats2.shape}"
+        )
+
+    # multiply by inverse of second (without symmetry)
+    misori_quats = quaternion_multiply(quats1, quaternion_invert(quats2))
+
+    # find the number of quaternions (generic input shapes are supported)
+    N = torch.prod(torch.tensor(data_shape[:-1]))
+
+    # retrieve the laue group elements for the first quaternions
+    laue_group_1 = laue_elements(laue_id_1).to(quats1.dtype).to(quats1.device)
+
+    # if the laue groups are the same, then the second laue group is the same as the first
+    if laue_id_1 == laue_id_2:
+        laue_group_2 = laue_group_1
+    else:
+        laue_group_2 = laue_elements(laue_id_2).to(quats2.dtype).to(quats2.device)
+
+    # pre / post mult by Laue operators of the second and first symmetry groups respectively
+    # broadcasting is done so that the output is of shape (N, |laue_group_2|, |laue_group_1|, 4)
+    equivalent_quaternions = quaternion_multiply(
+        laue_group_2.reshape(1, -1, 1, 4),
+        quaternion_multiply(
+            misori_quats.view(N, 1, 1, 4), laue_group_1.reshape(1, 1, -1, 4)
+        ),
+    )
+
+    # flatten along the laue group dimensions
+    equivalent_quaternions = equivalent_quaternions.reshape(N, -1, 4)
+
+    # find the quaternion with the largest real part value (smallest angle)
+    row_maximum_indices = torch.argmax(
+        equivalent_quaternions[..., 0].abs(),
+        dim=-1,
+    )
+
+    # TODO - Multiple equivalent quaternions can have the same angle. This function
+    # should choose the one with an axis that is in the fundamental sector of the sphere
+    # under the symmetry given by the intersection of the two Laue groups.
+
+    # gather the equivalent quaternions with the largest w value for each equivalent quaternion set
+    output = equivalent_quaternions[torch.arange(N), row_maximum_indices]
+
+    return output.reshape(data_shape)
+
+
+@torch.jit.script
 def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
     """
     Determine if the given 3D points are in the fundamental zone of the given
