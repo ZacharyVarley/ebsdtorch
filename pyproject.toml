@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ebsdtorch"
-version = "0.0.0-post.29+eb7494f"
+version = "0.0.30"
 description = ""
 authors = ["Zachary Varley <zvarley@andrew.cmu.edu>"]
 readme = "README.md"
@@ -16,5 +16,11 @@ build-backend = "poetry_dynamic_versioning.backend"
 
 [tool.poetry-dynamic-versioning]
 enable = true
-vcs = "git"
-style = "semver"
+style = "pep440"
+format-jinja = """
+    {%- set ns = namespace(version=base) -%}
+    {%- for i in range(distance) -%}
+        {%- set ns.version = bump_version(ns.version) -%}
+    {%- endfor -%}
+    {{- ns.version -}}
+"""
