@@ -51,7 +51,7 @@ class OnlineCovMatrix(torch.nn.Module):
     def __init__(
         self,
         n_features: int,
-        covmat_dtype: torch.dtype = torch.float64,
+        covmat_dtype: torch.dtype = torch.float32,
         delta_dtype: torch.dtype = torch.float32,
         correlation: bool = False,
     ):

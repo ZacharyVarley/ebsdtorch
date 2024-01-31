@@ -275,7 +275,7 @@ def so3_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     data_shape = quats.shape
     N = torch.prod(torch.tensor(data_shape[:-1]))
     card = get_laue_mult(laue_id) // 2
-    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
+    laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
     equivalent_quaternions_real = quaternion_real_of_prod(
@@ -307,7 +307,7 @@ def so3_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
     # get the important shapes
     data_shape = quats.shape
     N = torch.prod(torch.tensor(data_shape[:-1]))
-    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
+    laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
     equivalent_quaternions = quaternion_multiply(
@@ -338,7 +338,7 @@ def so3_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     data_shape = quats.shape
     N = torch.prod(torch.tensor(data_shape[:-1]))
     card = get_laue_mult(laue_id) // 2
-    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
+    laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
     equiv_quats_real_part = quaternion_real_of_prod(
@@ -505,7 +505,7 @@ def s2_equiv_laue(points: Tensor, laue_id: int) -> Tensor:
     # get the important shapes
     data_shape = points.shape
     N = torch.prod(torch.tensor(data_shape[:-1]))
-    laue_group = laue_elements(laue_id).to(points.device).to(points.dtype)
+    laue_group = laue_elements(laue_id).to(points.dtype).to(points.device)
 
     # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
     equivalent_points = quaternion_apply(

@@ -5,12 +5,6 @@ from torch import Tensor
 from ebsdtorch.patterns.square_hemisphere_bijection import square_lambert
 from ebsdtorch.s2_and_so3.orientations import quaternion_apply
 
-# @torch.jit.script
-# def pattern_center_to_camera_matrix(
-#     pcs: Tensor,
-
-# )
-
 
 @torch.jit.script
 def average_pc_geometry(
