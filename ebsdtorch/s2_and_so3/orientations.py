@@ -702,9 +702,9 @@ def ro2ax(ro: Tensor) -> Tensor:
     Returns:
         torch.Tensor: A tensor of shape (N, 4) axis-angle representations.
     """
-    ax = torch.zeros(ro.shape[0], 4, dtype=torch.float64)
+    ax = torch.zeros(ro.shape[0], 4, dtype=ro.dtype, device=ro.device)
     mask_zero_ro = torch.abs(ro[:, 3]) < 1e-8
-    ax[mask_zero_ro] = torch.tensor([0, 0, 1, 0], dtype=torch.float64)
+    ax[mask_zero_ro] = torch.tensor([0, 0, 1, 0], dtype=ro.dtype, device=ro.device)
 
     mask_inf_ro = torch.isinf(ro[:, 3])
     ax[mask_inf_ro, :3] = ro[mask_inf_ro, :3]
