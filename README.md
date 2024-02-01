@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
-![GitHub - License](https://img.shields.io/github/license/ZacharyVarley/ebsdtorch) 
+[![GitHub - License](https://img.shields.io/github/license/ZacharyVarley/ebsdtorch)](https://github.com/ZacharyVarley/ebsdtorch/blob/main/LICENSE)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 
 PyTorch-only Python library for analyzing electron backscatter diffraction (EBSD)
