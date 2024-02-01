@@ -1,6 +1,6 @@
 # ebsdtorch
 
-[![PyPI version](https://badge.fury.io/py/ebsdtorch.svg)](https://badge.fury.io/py/ebsdtorch)
+[![PyPI version](https://img.shields.io/pypi/v/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 ![GitHub - License](https://img.shields.io/github/license/ZacharyVarley/ebsdtorch) 
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
