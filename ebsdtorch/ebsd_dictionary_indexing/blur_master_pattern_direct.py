@@ -7,9 +7,9 @@ computed in direct space. It is only meant for testing purposes.
 """
 
 import torch
-from ebsdtorch.patterns.square_hemisphere_bijection import (
-    square_lambert,
-    inv_square_lambert,
+from ebsdtorch.geometry.square_projection import (
+    rosca_lambert,
+    inv_rosca_lambert,
 )
 from ebsdtorch.s2_and_so3.orientations import (
     quaternion_apply,
@@ -80,7 +80,7 @@ def annulus_bse_detector(
         .reshape(-1, 2)
         .to(square_lambert_mp.device)
     )
-    grid_points_xyz = inv_square_lambert(grid_points_xy.reshape(-1, 2))
+    grid_points_xyz = inv_rosca_lambert(grid_points_xy.reshape(-1, 2))
 
     mp_blurred = torch.zeros(
         (len(grid_points_xyz),), dtype=torch.float32, device=square_lambert_mp.device
@@ -105,7 +105,7 @@ def annulus_bse_detector(
         )
 
         # convert the latitude and longitude to planar coordinates
-        planar_coords = square_lambert(annulus_points_rotated)
+        planar_coords = rosca_lambert(annulus_points_rotated)
 
         # interpolate the rotated points onto the master pattern
         mp_blurred[i : i + batch_size] = (

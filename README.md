@@ -1,17 +1,15 @@
-# ebsdtorch
+# EBSDTorch
 
 [![PyPI version](https://img.shields.io/pypi/v/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 [![GitHub - License](https://img.shields.io/github/license/ZacharyVarley/ebsdtorch)](https://github.com/ZacharyVarley/ebsdtorch/blob/main/LICENSE)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 
-PyTorch-only Python library for analyzing electron backscatter diffraction (EBSD)
-patterns. It is designed to be fast and easy to use.
+PyTorch-only library for electron backscatter diffraction (EBSD) patterns.
 
 ## Installation
 
-To install ebsdtorch, first install PyTorch, then run this command in your
-terminal:
+To install EBSDTorch, first install PyTorch, then run this command in your terminal:
 
 ```bash
 pip install ebsdtorch
@@ -19,13 +17,15 @@ pip install ebsdtorch
 
 ## Features (and TODOs)
 
-- :white_check_mark: Uniform orientation sampling on the sphere and SO(3)
-- :white_check_mark: Laue group operations on the sphere and SO(3)
+- :white_check_mark: wide GPU support via PyTorch device abstraction & backends
+
+- :white_check_mark: Uniform sampling on sphere / SO(3)
+- :white_check_mark: Laue symmetry operations on sphere / SO(3)
 - :white_check_mark: Modified square Lambert projection and inverse
 
-- :white_check_mark: EBSD dictionary indexing (conventional pixel space)
-- :white_check_mark: EBSD dictionary indexing (covariance matrix PCA)
-- :white_large_square: EBSD dictionary indexing (Halko randomized PCA)
+- :white_check_mark: dictionary indexing (conventional pixel space)
+- :white_check_mark: dictionary indexing (covariance matrix PCA)
+- :white_large_square: dictionary indexing (Halko randomized PCA)
 
 - :white_check_mark: 8-bit Quantization on CPU for fast indexing
 - :white_large_square: 8-bit Quantization on GPU for (very) fast indexing

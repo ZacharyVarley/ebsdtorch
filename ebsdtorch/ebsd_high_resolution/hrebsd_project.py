@@ -13,8 +13,8 @@ from typing import Optional
 import torch
 from torch import Tensor
 
-from ebsdtorch.patterns.pattern_projection import average_pc_geometry
-from ebsdtorch.patterns.square_hemisphere_bijection import square_lambert
+from ebsdtorch.geometry.average_pc import average_pc
+from ebsdtorch.geometry.square_projection import rosca_lambert
 from ebsdtorch.s2_and_so3.orientations import quaternion_apply
 
 
@@ -114,7 +114,7 @@ def project_HREBSD_pattern(
         )
 
     # get direction cosines
-    direction_cosines = average_pc_geometry(
+    direction_cosines = average_pc(
         pcs,
         n_rows,
         n_cols,
@@ -150,7 +150,7 @@ def project_HREBSD_pattern(
     mask = rotated_vectors[..., 2] > 0
 
     # get the coordinates within the image square
-    coords_within_square = square_lambert(rotated_vectors)
+    coords_within_square = rosca_lambert(rotated_vectors)
 
     # where the z component is positive, use the Northern Hemisphere projection
     output[mask] = torch.nn.functional.grid_sample(

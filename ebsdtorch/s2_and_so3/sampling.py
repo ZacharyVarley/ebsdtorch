@@ -1,21 +1,23 @@
 import torch
-
-from ebsdtorch.s2_and_so3.orientations import (
-    cu2ho,
-    ho2qu,
-    standardize_quaternion,
-    theta_phi_to_xyz,
-)
+from ebsdtorch.s2_and_so3.orientations import cu2qu, standardize_quaternion
+from ebsdtorch.s2_and_so3.sphere import theta_phi_to_xyz
 
 
 @torch.jit.script
 def s2_fibonacci_lattice(
-    n: int, device: torch.device, mode: str = "avg"
+    n: int,
+    device: torch.device,
+    mode: str = "avg",
 ) -> torch.Tensor:
     """
     Sample n points on the unit sphere using the Fibonacci spiral method.
-    :param n: number of points to sample
-    :return: torch tensor of shape (n, 3) containing the points
+
+    Args:
+        n (int): the number of points to sample
+        device (torch.device): the device to use
+        mode (str): the mode to use for the Fibonacci lattice. "avg" will
+            optimize for average spacing, while "max" will optimize for
+            maximum spacing. Default is "avg".
 
     References:
     https://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
@@ -53,8 +55,24 @@ def s2_fibonacci_lattice(
 
 
 @torch.jit.script
-def halton_sequence(size: int, base: int, device: torch.device) -> torch.Tensor:
-    """Generate the Halton sequence of given size and base using torch."""
+def halton_sequence(
+    size: int,
+    base: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Generate the Halton sequence of given size and base using torch.
+
+    Args:
+        size (int): the number of points to generate
+        base (int): the base to use for the Halton sequence
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the Halton sequence of size `size` and base `base`
+
+    """
+
     digits = (
         int(
             torch.log10(torch.tensor(float(size * base), device=device))
@@ -72,9 +90,26 @@ def halton_sequence(size: int, base: int, device: torch.device) -> torch.Tensor:
 
 @torch.jit.script
 def halton_sequence_id(
-    id_start: int, id_stop: int, base: int, device: torch.device
+    id_start: int,
+    id_stop: int,
+    base: int,
+    device: torch.device,
 ) -> torch.Tensor:
-    """Generate the Halton sequence of given size and base using torch."""
+    """
+
+    Generate the Halton sequence of given size and base using torch.
+
+    Args:
+        id_start (int): the starting index
+        id_stop (int): the stopping index
+        base (int): the base to use for the Halton sequence
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the Halton sequence of size `size` and base `base`
+
+    """
+
     if id_start > 1e15 or id_stop > 1e15:
         raise ValueError("id_start and id_stop must be less than 999999999999999")
     size = id_stop - id_start
@@ -94,8 +129,23 @@ def halton_sequence_id(
 
 
 @torch.jit.script
-def halton_id_3d(id_start: int, id_stop: int, device: torch.device) -> torch.Tensor:
-    """Generate a 3D Halton sequence given the start and stop indices"""
+def halton_id_3d(
+    id_start: int,
+    id_stop: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Generate a 3D Halton sequence in the unit cube.
+
+    Args:
+        id_start (int): the starting index
+        id_stop (int): the stopping index
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the 3D Halton sequence points (n, 3)
+
+    """
     return torch.stack(
         [
             halton_sequence_id(id_start, id_stop, 2, device),
@@ -107,27 +157,52 @@ def halton_id_3d(id_start: int, id_stop: int, device: torch.device) -> torch.Ten
 
 
 @torch.jit.script
-def so3_halton_cubochoric(id_start: int, id_stop: int, device: torch.device):
+def so3_halton_cubochoric(
+    id_start: int,
+    id_stop: int,
+    device: torch.device,
+):
     """
-    Generate a 3D Halton sequence in the cubochoric mapping of SO(3). Orientations
+
+    Generate a 3D Halton sequence in cubochoric coordinates. Orientations
     are returned as unit quaternions with positive scalar part (w, x, y, z)
+
+    Args:
+        id_start (int): the starting index
+        id_stop (int): the stopping index
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the 3D Halton sequence points in cubochoric coordinates (n, 3)
+
+
     """
     cu = halton_id_3d(id_start, id_stop, device=device) * torch.pi ** (
         2 / 3
     ) - 0.5 * torch.pi ** (2 / 3)
-    ho = cu2ho(cu)
-    qu = ho2qu(ho)
+    qu = cu2qu(cu)
     qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
     return qu
 
 
 @torch.jit.script
 def so3_cubochoric_rand(n: int, device: torch.device) -> torch.Tensor:
+    """
+    Generate a 3D random sampling in cubochoric coordinates. Orientations
+    are returned as unit quaternions with positive scalar part (w, x, y, z)
+
+    Args:
+        n (int): the number of orientations to sample
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the 3D random sampling in cubochoric coordinates (n, 3)
+
+    """
     box_sampling = torch.rand(n, 3, device=device) * torch.pi ** (
         2.0 / 3.0
     ) - 0.5 * torch.pi ** (2.0 / 3.0)
-    ho = cu2ho(box_sampling)
-    qu = ho2qu(ho)
+    qu = cu2qu(box_sampling)
     qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
     return qu
 
@@ -135,8 +210,16 @@ def so3_cubochoric_rand(n: int, device: torch.device) -> torch.Tensor:
 @torch.jit.script
 def so3_cubochoric_grid(edge_length: int, device: torch.device):
     """
-    Generate a 3D grid in cubochoric coordinates. Orientations
+    Generate a 3D grid sampling in cubochoric coordinates. Orientations
     are returned as unit quaternions with positive scalar part (w, x, y, z)
+
+    Args:
+        edge_length (int): the number of points along each axis of the cube
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the 3D grid sampling in cubochoric coordinates (n, 3)
+
     """
     cu = torch.linspace(
         -0.5 * torch.pi ** (2 / 3),
@@ -145,7 +228,6 @@ def so3_cubochoric_grid(edge_length: int, device: torch.device):
         device=device,
     )
     cu = torch.stack(torch.meshgrid(cu, cu, cu, indexing="ij"), dim=-1).reshape(-1, 3)
-    ho = cu2ho(cu)
-    qu = ho2qu(ho)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
+    qu = cu2qu(cu)
+    qu = standardize_quaternion(qu)
     return qu

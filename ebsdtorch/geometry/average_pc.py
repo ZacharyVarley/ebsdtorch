@@ -1,13 +1,13 @@
-from typing import Optional
+from typing import Optional, Tuple
 import torch
 from torch import Tensor
 
-from ebsdtorch.patterns.square_hemisphere_bijection import square_lambert
+from ebsdtorch.geometry.square_projection import rosca_lambert
 from ebsdtorch.s2_and_so3.orientations import quaternion_apply
 
 
 @torch.jit.script
-def average_pc_geometry(
+def average_pc(
     pcs: Tensor,
     n_rows: int,
     n_cols: int,
@@ -101,13 +101,15 @@ def average_pc_geometry(
 
 
 @torch.jit.script
-def project_patterns(
+def avg_pc_proj_to_det(
     master_pattern_MSLNH: Tensor,
     master_pattern_MSLSH: Tensor,
     quaternions: Tensor,
     direction_cosines: Tensor,
 ) -> Tensor:
     """
+    Project a direction cosine to the detector plane.
+
     Args:
         master_pattern_MSLNH: modified Square Lambert projection for the Northern Hemisphere. Shape (H, W)
         master_pattern_MSLSH: modified Square Lambert projection for the Southern Hemisphere. Shape (H, W)
@@ -143,7 +145,7 @@ def project_patterns(
     mask = rotated_vectors[..., 2] > 0
 
     # where the z component is negative, use the Southern Hemisphere projection
-    coords_within_square = square_lambert(rotated_vectors)
+    coords_within_square = rosca_lambert(rotated_vectors)
 
     # where the z component is positive, use the Northern Hemisphere projection
     output[mask] = torch.nn.functional.grid_sample(
@@ -170,13 +172,6 @@ def project_pattern_multiple_geometry(
     direction_cosines: Tensor,
 ) -> Tensor:
     """
-
-    This function projects the master pattern onto the detector for each crystalline orientation.
-    It is called "paired" because each orientation is paired with another pattern center triplet of
-    direction cosines. This function would make sense to use in the context of indexing a map of
-    EBSD patterns. Each crystalline orientation would be paired with a pattern center triplet that
-    corresponds to that location on the sample.
-
     Args:
         master_pattern_MSLNH: modified Square Lambert projection for the Northern Hemisphere. Shape (H, W)
         master_pattern_MSLSH: modified Square Lambert projection for the Southern Hemisphere. Shape (H, W)
@@ -212,7 +207,7 @@ def project_pattern_multiple_geometry(
     mask = rotated_vectors[..., 2] > 0
 
     # where the z component is negative, use the Southern Hemisphere projection
-    coords_within_square = square_lambert(rotated_vectors)
+    coords_within_square = rosca_lambert(rotated_vectors)
 
     # where the z component is positive, use the Northern Hemisphere projection
     output[mask] = torch.nn.functional.grid_sample(

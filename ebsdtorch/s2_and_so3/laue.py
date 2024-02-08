@@ -1,8 +1,29 @@
 """
 
-This file implements operations for points on the 2-sphere and unit quaternions
-under a given Laue group. Quaternion operators for the Laue groups were taken
-from the following paper:
+This file implements operations for points on the 2-sphere and orientations 
+represented by unit quaternions, all under given Laue group(s).
+
+Notes:
+
+Image a cube floating in 3D space. The orientation fundamental zone is a unique
+selection of all possible orientings under the symmetry of the cube. This space
+is smaller than the space of all possible orientations something without
+symmetry. Now imagine two cubes floating in 3D space. The misorientation
+fundamental zone is a unique selection of all relative orientations of the two
+cubes that are unique under the symmetry of the two cubes (the "exchange
+symmetry"). The symmetry of the two objects need not be the same. For example,
+the first object could be a cube and the second object could be a tetrahedron.
+The misorientation fundamental zone is smaller than all of orientation space.
+
+For a detailed, see the following paper:
+
+Krakow, Robert, Robbie J. Bennett, Duncan N. Johnstone, Zoja Vukmanovic,
+Wilberth Solano-Alvarez, Steven J. Lainé, Joshua F. Einsle, Paul A. Midgley,
+Catherine MF Rae, and Ralf Hielscher. "On three-dimensional misorientation
+spaces." Proceedings of the Royal Society A: Mathematical, Physical and
+Engineering Sciences 473, no. 2206 (2017): 20170274.
+
+Quaternion operators for the Laue groups were taken from the following paper:
 
 Larsen, Peter Mahler, and Søren Schmidt. "Improved orientation sampling for
 indexing diffraction patterns of polycrystalline materials." Journal of Applied
@@ -23,6 +44,7 @@ from ebsdtorch.s2_and_so3.orientations import (
     xyz_to_theta_phi,
 )
 from ebsdtorch.s2_and_so3.sampling import so3_cubochoric_grid, s2_fibonacci_lattice
+from ebsdtorch.geometry.square_projection import inv_rosca_lambert
 
 
 @torch.jit.script
@@ -102,8 +124,9 @@ def laue_elements(laue_id: int) -> Tensor:
     """
 
     # sqrt(2) / 2 and sqrt(3) / 2
-    R2 = 0.7071067811865475244008443621048490392848359376884740365883398689
-    R3 = 0.8660254037844386467637231707529361834714026269051903140279034897
+    R2 = 1.0 / (2.0**0.5)
+    R3 = (3.0**0.5) / 2.0
+
     # 7 subsets of O Laue groups (O, T, D4, D2, C4, C2, C1)
     LAUE_O = torch.tensor(
         [
@@ -249,12 +272,11 @@ def laue_elements(laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def so3_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
+def ori_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     """
     This function moves the given quaternions to the fundamental zone of the
-    given Laue group. The space of a single orientations is different than that
-    of two relative orientations. This function moves the quaternions to the
-    fundamental zone of the space of single orientations.
+    given Laue group. This computes the orientation fundamental zone, not the
+    misorientation fundamental zone.
 
     Args:
         quats: quaternions to move to fundamental zone of shape (..., 4)
@@ -292,9 +314,9 @@ def so3_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def so3_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
+def ori_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
     """
-    Return the equivalent quaternions under the given Laue group.
+    Find the equivalent orientations under the given Laue group.
 
     Args:
         quats: quaternions to move to fundamental zone of shape (..., 4)
@@ -318,12 +340,10 @@ def so3_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def so3_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
+def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     """
-    Determine if the given quaternions are in the fundamental zone of the given
-    Laue group. This computes the orientation fundamental zone, not the
-    misorientation fundamental zone.
-
+    Determine if the given quaternions are in the orientation fundamental zone
+    of the given Laue group, not the misorientation fundamental zone.
 
     Args:
         quats: quaternions to move to fundamental zone of shape (..., 4)
@@ -331,7 +351,6 @@ def so3_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
 
     Returns:
         mask of quaternions in fundamental zone of shape (...,)
-
 
     """
     # get the important shapes
@@ -354,27 +373,30 @@ def so3_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def disori_angle(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
+def ori_angle_laue(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
     """
 
-    Return the disorientation angle in radians between the given quaternions.
+    Return the misalignment angle in radians between the given quaternions. This
+    is not the disorientation angle, which is the angle between the two quaternions
+    with both pre and post multiplication by the respective Laue groups.
 
     Args:
         quats1: quaternions of shape (..., 4)
         quats2: quaternions of shape (..., 4)
 
     Returns:
-        disorientation angle in radians of shape (...)
+        orientation angle in radians of shape (...)
 
     """
+
     # multiply without symmetry
     misori_quats = quaternion_multiply(quats1, quaternion_invert(quats2))
 
-    # move the misorientation quaternions to the fundamental zone (disorientation)
-    disori_quats_fz = so3_to_fz_laue(misori_quats, laue_id)
+    # move the orientation quaternions to the fundamental zone
+    ori_quats_fz = ori_to_fz_laue(misori_quats, laue_id)
 
     # find the disorientation angle
-    return misorientation_angle(norm_standard_quaternion(disori_quats_fz))
+    return misorientation_angle(norm_standard_quaternion(ori_quats_fz))
 
 
 @torch.jit.script
@@ -521,17 +543,14 @@ def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def s2_to_fz_laue(points: Tensor, laue_group: Tensor, laue_id: int) -> Tensor:
+def s2_to_fz_laue(points: Tensor, laue_id: int) -> Tensor:
     """
-    Move the given 3D points to the fundamental zone of the given Laue group. This
-    computes the sphere fundamental zone, not the misorientation nor orientation
-    fundamental zone. The 2-spherical fundamental zone is also called the
-    fundamental sector.
+    Move 3D Cartesian points on 2-sphere to fundamental zone for the Laue group.
 
     Args:
-        points: points to move to fundamental zone of shape (..., 3)
-        laue_group: laue group of points to move to fundamental zone
-        laue_id: laue group of points to move to fundamental zone
+        points: points to move to fundamental zone of shape (..., 3) laue_group:
+        laue group of points to move to fundamental zone laue_id: laue group of
+        points to move to fundamental zone
 
     Returns:
         points in fundamental zone of shape (..., 3)
@@ -541,6 +560,9 @@ def s2_to_fz_laue(points: Tensor, laue_group: Tensor, laue_id: int) -> Tensor:
     # get the important shapes
     data_shape = points.shape
     N = torch.prod(torch.tensor(data_shape[:-1]))
+
+    # get the laue group elements
+    laue_group = laue_elements(laue_id).to(points.dtype).to(points.device)
 
     # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
     equivalent_points = quaternion_apply(
@@ -588,7 +610,7 @@ def s2_equiv_laue(points: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def so3_sample_fz_laue(
+def sample_ori_fz_laue(
     laue_id: int,
     target_n_samples: int,
     device: torch.device,
@@ -620,7 +642,7 @@ def so3_sample_fz_laue(
     so3_samples = so3_cubochoric_grid(edge_length, device=device)
 
     # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[so3_in_fz_laue(so3_samples, laue_id)]
+    so3_samples_fz = so3_samples[ori_in_fz_laue(so3_samples, laue_id)]
 
     # randomly permute the samples
     so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
@@ -629,7 +651,7 @@ def so3_sample_fz_laue(
 
 
 @torch.jit.script
-def so3_sample_fz_laue_angle(
+def sample_ori_fz_laue_angle(
     laue_id: int,
     target_mean_disorientation: float,
     device: torch.device,
@@ -639,9 +661,8 @@ def so3_sample_fz_laue_angle(
 
     A function to sample the fundamental zone of SO(3) for a given Laue group.
     This function uses the cubochoric grid sampling method, although other methods
-    could be used. A slight oversampling is used to ensure that the number of
-    samples closest to the target number of samples is used, as rejection sampling
-    is used here.
+    could be used. A target number of samples is used, as rejection sampling
+    is used here, so the number of samples will almost certainly be different.
 
     Args:
         laue_id: integer between 1 and 11 inclusive
@@ -664,7 +685,7 @@ def so3_sample_fz_laue_angle(
     so3_samples = so3_cubochoric_grid(edge_length, device=device)
 
     # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[so3_in_fz_laue(so3_samples, laue_id)]
+    so3_samples_fz = so3_samples[ori_in_fz_laue(so3_samples, laue_id)]
 
     # randomly permute the samples
     if permute:
@@ -674,7 +695,7 @@ def so3_sample_fz_laue_angle(
 
 
 @torch.jit.script
-def s2_sample_fz_laue(
+def sample_s2_fz_laue_fibonacci(
     laue_id: int,
     target_n_samples: int,
     device: torch.device,
@@ -709,8 +730,55 @@ def s2_sample_fz_laue(
 
 
 @torch.jit.script
+def sample_s2_fz_laue_rosca(
+    laue_id: int,
+    target_n_samples: int,
+    device: torch.device,
+) -> Tensor:
+    """
+
+    A function to sample the fundamental zone of S2 for a given Laue group. This
+    function uses the Rosca-Lambert equal area bijection between the square and
+    the Northern hemisphere of the unit sphere to transform a uniform grid of 2D
+    points to the sphere, where rejection sampling discards points not in the
+    fundamental zone. The number of samples will almost certainly be different
+    than the target number of samples.
+
+    Args:
+        laue_id: integer between 1 and 11 inclusive
+        target_n_samples: number of samples to use on the fundamental sector of S2
+        device: torch device to return the tensor on
+
+    Returns:
+        torch tensor of shape (n_samples, 3) containing the sampled orientations
+
+    """
+
+    laue_mult = get_laue_mult(laue_id)
+
+    # estimate the edge length of the square
+    edge_length = int((target_n_samples * laue_mult) ** 0.5)
+
+    # make a meshgrid and flatten it on the square [-1, 1] x [-1, 1]
+    x = torch.linspace(-1.0, 1.0, edge_length, device=device)
+    y = torch.linspace(-1.0, 1.0, edge_length, device=device)
+    xx, yy = torch.meshgrid(x, y)
+    square_points = torch.stack((xx.flatten(), yy.flatten()), dim=-1)
+
+    # use the Rosca-Lambert equal area bijection to map the square to the sphere
+    s2_samples = inv_rosca_lambert(square_points)
+
+    # filter out all but the S2 fundamental sector of the laue group
+    s2_samples_fz = s2_samples[s2_in_fz_laue(s2_samples, laue_id)]
+
+    return s2_samples_fz
+
+
+@torch.jit.script
 def so3_color_fz_laue(
-    quaternions: Tensor, reference_direction: Tensor, laue_group: Tensor, laue_id: int
+    quaternions: Tensor,
+    reference_direction: Tensor,
+    laue_id: int,
 ) -> Tensor:
     """
 
@@ -720,9 +788,7 @@ def so3_color_fz_laue(
 
     reference_direction_moved = quaternion_apply(quaternions, reference_direction)
 
-    reference_direction_moved_fz = s2_to_fz_laue(
-        reference_direction_moved, laue_group, laue_id
-    )
+    reference_direction_moved_fz = s2_to_fz_laue(reference_direction_moved, laue_id)
 
     theta_phi = xyz_to_theta_phi(reference_direction_moved_fz)  # INCORRECT!!!
     theta_phi[:, 0] = theta_phi[:, 0] * 2.0 + 0.5
@@ -762,52 +828,3 @@ def so3_color_fz_laue(
     output[m5] = torch.stack((hsv[m5, 2], p[m5], q[m5]), dim=-1)
 
     return (output * 255.0).byte()
-
-
-# # test if moving points on a sphere in 3D to the fundamental zone
-# # makes a small fundamental zone on the sphere
-
-# import numpy as np
-
-# # generate random points on a sphere
-# N = 100000
-# points = torch.randn(N, 3)
-# points = points / torch.linalg.norm(points, dim=1, keepdim=True)
-
-# from sampling import s2_fibonacci_lattice
-
-# points = s2_fibonacci_lattice(N).to(torch.float32).to(points.device)
-# points = points / torch.linalg.norm(points, dim=1, keepdim=True)
-
-# # move points to fundamental zone
-# # points_fz = points_to_s2_fz(points, 11)
-
-# are_in_fz = _points_are_in_s2_fz(points, 9)
-# print(len(are_in_fz))
-# print(f"{are_in_fz.sum()} points are in the fundamental zone")
-# points_fz = points[are_in_fz]
-# points_not_fz = points[~are_in_fz]
-
-# # plot the points using plotly
-# import plotly.graph_objects as go
-
-# fig = go.Figure()
-# fig.add_trace(
-#     go.Scatter3d(
-#         x=points_fz[:, -3].numpy(),
-#         y=points_fz[:, -2].numpy(),
-#         z=points_fz[:, -1].numpy(),
-#         mode="markers",
-#         marker=dict(size=2, color="red"),
-#     )
-# )
-# fig.add_trace(
-#     go.Scatter3d(
-#         x=points_not_fz[:, -3].numpy(),
-#         y=points_not_fz[:, -2].numpy(),
-#         z=points_not_fz[:, -1].numpy(),
-#         mode="markers",
-#         marker=dict(size=2, color="blue"),
-#     )
-# )
-# fig.show()

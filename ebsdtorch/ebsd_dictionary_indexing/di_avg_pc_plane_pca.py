@@ -1,9 +1,8 @@
 """
 This file implements dictionary indexing of EBSD patterns using PCA. The class
-is designed to be used with a single pattern center and a single detector
-geometry, which is the conventional approach for EBSD. In the future, I will add
-support for fitting the actual detector geometry, as has been done for other
-diffraction based imaging settings. 
+is designed to be used with a single average pattern center, which is the
+conventional approach for EBSD. For now it supports a single phase (one master
+pattern), but I plan to add support for multiple phases soon.
 
 """
 
@@ -11,14 +10,11 @@ from typing import Tuple
 import torch
 from torch import Tensor
 
-from ebsdtorch.patterns.pattern_projection import (
-    project_patterns,
-    average_pc_geometry,
-)
+from ebsdtorch.geometry.average_pc import avg_pc_proj_to_det, average_pc
 from ebsdtorch.ebsd_dictionary_indexing.utils_covariance_matrix import OnlineCovMatrix
 from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
-from ebsdtorch.s2_and_so3.laue import so3_sample_fz_laue
+from ebsdtorch.s2_and_so3.laue import sample_ori_fz_laue
 
 
 def _detector_covmat(
@@ -45,7 +41,7 @@ def _detector_covmat(
     for so3_samples_fz_batch in pb:
         # get the values of the master pattern at the rotated points over FZ
         # this is a (N_so3, N_s2) tensor, our "data matrix"
-        patterns = project_patterns(
+        patterns = avg_pc_proj_to_det(
             master_pattern_MSLNH=master_pattern_MSLNH,
             master_pattern_MSLSH=master_pattern_MSLSH,
             quaternions=so3_samples_fz_batch,
@@ -85,7 +81,7 @@ def _dictionary_pca_loadings(
 
     for so3_samples_fz_batch in pb:
         # this is a (N_so3_batch, N_pixels) tensor, our "data matrix"
-        patterns = project_patterns(
+        patterns = avg_pc_proj_to_det(
             master_pattern_MSLNH=master_pattern_MSLNH,
             master_pattern_MSLSH=master_pattern_MSLSH,
             quaternions=so3_samples_fz_batch,
@@ -186,7 +182,7 @@ class EBSDDIwithPCA(torch.nn.Module):
         """
 
         # get the direction cosines for each detector pixel
-        detector_cosines = average_pc_geometry(
+        detector_cosines = average_pc(
             pcs=self.pattern_center,
             n_rows=self.detector_height,
             n_cols=self.detector_width,
@@ -197,7 +193,7 @@ class EBSDDIwithPCA(torch.nn.Module):
         )
 
         # sample orientation space
-        so3_samples_fz = so3_sample_fz_laue(
+        so3_samples_fz = sample_ori_fz_laue(
             laue_id=self.laue_group,
             target_n_samples=so3_n_samples,
             device=detector_cosines.device,
@@ -241,7 +237,7 @@ class EBSDDIwithPCA(torch.nn.Module):
         """
 
         # sample orientation space (can be different than the one used for the covariance matrix)
-        so3_samples_fz = so3_sample_fz_laue(
+        so3_samples_fz = sample_ori_fz_laue(
             laue_id=self.laue_group,
             target_n_samples=so3_n_samples,
             device=self.detector_cosines.device,
