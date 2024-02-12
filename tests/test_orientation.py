@@ -217,7 +217,7 @@ def test_edge_quaternion_operations(test_edge_quaternions, convert_quat_func_pai
 
     # check if the difference is within tolerance
     assert np.allclose(
-        quats, recon, atol=1e-6
+        quats, recon, atol=1e-6, rtol=1e-6
     ), f"{conv_forward.name} failed on {names[max_diff]} with in {quats[max_diff]} and out {recon[max_diff]}"
 
 

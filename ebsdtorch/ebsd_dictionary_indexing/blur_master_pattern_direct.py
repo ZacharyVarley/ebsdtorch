@@ -7,7 +7,7 @@ computed in direct space. It is only meant for testing purposes.
 """
 
 import torch
-from ebsdtorch.geometry.square_projection import (
+from ebsdtorch.s2_and_so3.square_projection import (
     rosca_lambert,
     inv_rosca_lambert,
 )
@@ -16,7 +16,7 @@ from ebsdtorch.s2_and_so3.orientations import (
     quaternion_rotate_sets_sphere,
 )
 from ebsdtorch.s2_and_so3.sampling import s2_fibonacci_lattice
-from ebsdtorch.s2_and_so3.orientations import xyz_to_theta_phi
+from ebsdtorch.s2_and_so3.sphere import xyz_to_theta_phi
 
 
 @torch.jit.script

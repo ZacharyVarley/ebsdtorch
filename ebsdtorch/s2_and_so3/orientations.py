@@ -119,12 +119,12 @@ def quaternion_invert(quaternion: Tensor) -> Tensor:
 @torch.jit.script
 def quaternion_apply(quaternion: Tensor, point: Tensor) -> Tensor:
     """
-    Apply the rotation given by a quaternion to a 3D point.
-    Usual torch rules for broadcasting apply.
+    Apply the rotation given by a quaternion to a 3D point. Usual torch rules
+    for broadcasting apply.
 
     Args:
-        quaternion: Tensor of quaternions, real part first, of shape (..., 4).
-        point: Tensor of 3D points of shape (..., 3).
+        quaternion: shape (..., 4) of quaternions in the form (w, x, y, z)
+        point: shape (..., 3) of 3D points.
 
     Returns:
         Tensor of rotated points of shape (..., 3).
@@ -146,11 +146,10 @@ def normalize_quaternion(quaternion: Tensor) -> Tensor:
     Normalize a quaternion to a unit quaternion.
 
     Args:
-        quaternion: Quaternions with real part first,
-            as tensor of shape (..., 4).
+        quaternion: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
-        Normalized quaternions as tensor of shape (..., 4).
+        Tensor of normalized quaternions.
     """
     return quaternion / torch.norm(quaternion, dim=-1, keepdim=True)
 
@@ -161,11 +160,10 @@ def norm_standard_quaternion(quaternion: Tensor) -> Tensor:
     Normalize a quaternion to a unit quaternion and standardize it.
 
     Args:
-        quaternion: Quaternions with real part first,
-            as tensor of shape (..., 4).
+        quaternion: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
-        Normalized and standardized quaternions as tensor of shape (..., 4).
+        Tensor of normalized and standardized quaternions.
     """
     return standardize_quaternion(normalize_quaternion(quaternion))
 
@@ -202,7 +200,7 @@ def quaternion_rotate_sets_sphere(points_start: Tensor, points_finish) -> Tensor
         (points_start.shape[0], 4), dtype=points_start.dtype, device=points_start.device
     )
     out[valid, 0] = torch.cos(angle / 2)
-    out[valid, 1:] = torch.sin(angle / 2)[:, None] * (
+    out[valid, 1:] = torch.sin(angle / 2).unsqueeze(-1) * (
         cross / torch.norm(cross, dim=-1, keepdim=True)
     )
     out[~valid, 0] = 1
@@ -231,41 +229,38 @@ def misorientation_angle(quaternion: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def qu2ho(quaternion: Tensor) -> Tensor:
+def qu2ho(qu: Tensor) -> Tensor:
     """
     Convert rotations given as quaternions to homochoric coordinates.
 
     Args:
-        quaternion: Quaternions as tensor of shape (..., 4), with real part
-            first, which must be versors (unit quaternions).
+        quaternion: Quaternions as tensor of shape (..., 4).
 
     Returns:
         Homochoric coordinates as tensor of shape (..., 3).
     """
-    if quaternion.size(-1) != 4:
-        raise ValueError(f"Invalid quaternion shape {quaternion.shape}.")
+    if qu.size(-1) != 4:
+        raise ValueError(f"Invalid quaternion shape {qu.shape}.")
 
-    batch_dim = quaternion.shape[:-1]
-    n_qu = int(torch.prod(torch.tensor(batch_dim)))
+    batch_dim = qu.shape[:-1]
 
-    ho = torch.empty((n_qu, 3), dtype=quaternion.dtype, device=quaternion.device)
+    ho = torch.empty(batch_dim + (3,), dtype=qu.dtype, device=qu.device)
 
     # get the angle
-    angle = 2 * torch.acos(quaternion[..., 0])
+    angle = 2 * torch.acos(qu[..., 0])
 
     # get mask of zero angles
-    zero_mask = angle != 0
+    nonzero_mask = angle != 0
 
     # get the non-zero angles
-    nonzero_angles = angle[zero_mask][:, None]
+    nonzero_angles = angle[nonzero_mask][:, None]
 
-    ho[angle == 0] = 0
-    ho[angle != 0] = (
-        quaternion[zero_mask, 1:]
-        / torch.norm(quaternion[zero_mask, 1:], dim=-1, keepdim=True)
+    ho[~nonzero_mask] = 0
+    ho[nonzero_mask] = (
+        qu[nonzero_mask, 1:] / torch.norm(qu[nonzero_mask, 1:], dim=-1, keepdim=True)
     ) * (3.0 * (nonzero_angles - torch.sin(nonzero_angles)) / 4.0) ** (1 / 3)
 
-    return ho.view(batch_dim + (3,))
+    return ho
 
 
 @torch.jit.script
@@ -273,63 +268,81 @@ def om2qu(matrix: Tensor) -> Tensor:
     """
     Convert rotations given as rotation matrices to quaternions.
 
-    Adopted from:
-
-    Farrell, J.A., 2015. Computation of the Quaternion from a Rotation Matrix.
-    University of California, 2.
-
     Args:
         matrix: Rotation matrices as tensor of shape (..., 3, 3).
 
     Returns:
         quaternions with real part first, as tensor of shape (..., 4).
+
+    Notes:
+
+    Farrell, J.A., 2015. Computation of the Quaternion from a Rotation Matrix.
+    University of California, 2.
+
+    "Converting a Rotation Matrix to a Quaternion" by Mike Day, Insomniac Games
+
     """
     if matrix.size(-1) != 3 or matrix.size(-2) != 3:
         raise ValueError(f"Invalid rotation matrix shape {matrix.shape}.")
 
     batch_dim = matrix.shape[:-2]
-    m00, m01, m02, m10, m11, m12, m20, m21, m22 = torch.unbind(
-        matrix.reshape(batch_dim + (9,)), dim=-1
-    )
 
-    q_sq = torch.stack(
-        [
-            1.0 + m00 + m11 + m22,
-            1.0 + m00 - m11 - m22,
-            1.0 - m00 + m11 - m22,
-            1.0 - m00 - m11 + m22,
-        ],
-        dim=-1,
-    )
+    m00 = matrix[..., 0, 0]
+    m11 = matrix[..., 1, 1]
+    m22 = matrix[..., 2, 2]
+    m01 = matrix[..., 0, 1]
+    m02 = matrix[..., 0, 2]
+    m12 = matrix[..., 1, 2]
+    m20 = matrix[..., 2, 0]
+    m21 = matrix[..., 2, 1]
+    m10 = matrix[..., 1, 0]
 
-    q_abs = torch.where(q_sq > 0, torch.sqrt(q_sq), torch.zeros_like(q_sq))
+    mask_A = m22 < 0
+    mask_B = m00 > m11
+    mask_C = m00 < -m11
+    branch_1 = mask_A & mask_B
+    branch_2 = mask_A & ~mask_B
+    branch_3 = ~mask_A & mask_C
+    branch_4 = ~mask_A & ~mask_C
 
-    # we produce the desired quaternion multiplied by each of r, i, j, k
-    quat_by_rijk = torch.stack(
-        [
-            torch.stack([q_abs[..., 0] ** 2, m21 - m12, m02 - m20, m10 - m01], dim=-1),
-            torch.stack([m21 - m12, q_abs[..., 1] ** 2, m10 + m01, m02 + m20], dim=-1),
-            torch.stack([m02 - m20, m10 + m01, q_abs[..., 2] ** 2, m12 + m21], dim=-1),
-            torch.stack([m10 - m01, m20 + m02, m21 + m12, q_abs[..., 3] ** 2], dim=-1),
-        ],
-        dim=-2,
-    )
+    branch_1_t = 1 + m00[branch_1] - m11[branch_1] - m22[branch_1]
+    branch_1_t_rsqrt = 0.5 * torch.rsqrt(branch_1_t)
+    branch_2_t = 1 - m00[branch_2] + m11[branch_2] - m22[branch_2]
+    branch_2_t_rsqrt = 0.5 * torch.rsqrt(branch_2_t)
+    branch_3_t = 1 - m00[branch_3] - m11[branch_3] + m22[branch_3]
+    branch_3_t_rsqrt = 0.5 * torch.rsqrt(branch_3_t)
+    branch_4_t = 1 + m00[branch_4] + m11[branch_4] + m22[branch_4]
+    branch_4_t_rsqrt = 0.5 * torch.rsqrt(branch_4_t)
 
-    # We floor here at 0.1 but the exact level is not important; if q_abs is small,
-    # the candidate won't be picked.
-    flr = torch.tensor(0.1).to(dtype=q_abs.dtype, device=q_abs.device)
-    quat_candidates = quat_by_rijk / (2.0 * q_abs[..., None].max(flr))
+    qu = torch.empty(batch_dim + (4,), dtype=matrix.dtype, device=matrix.device)
 
-    # if not for numerical problems, quat_candidates[i] should be same (up to a sign),
-    # forall i; we pick the best-conditioned one (with the largest denominator)
-    best_indices = torch.argmax(q_abs, dim=-1)
+    qu[branch_1, 1] = branch_1_t * branch_1_t_rsqrt
+    qu[branch_1, 2] = (m01[branch_1] + m10[branch_1]) * branch_1_t_rsqrt
+    qu[branch_1, 3] = (m20[branch_1] + m02[branch_1]) * branch_1_t_rsqrt
+    qu[branch_1, 0] = (m12[branch_1] - m21[branch_1]) * branch_1_t_rsqrt
 
-    best_quats = quat_candidates[torch.arange(quat_candidates.shape[0]), best_indices]
+    qu[branch_2, 1] = (m01[branch_2] + m10[branch_2]) * branch_2_t_rsqrt
+    qu[branch_2, 2] = branch_2_t * branch_2_t_rsqrt
+    qu[branch_2, 3] = (m12[branch_2] + m21[branch_2]) * branch_2_t_rsqrt
+    qu[branch_2, 0] = (m20[branch_2] - m02[branch_2]) * branch_2_t_rsqrt
 
-    # standardize the quaternions
-    best_quats = standardize_quaternion(best_quats)
+    qu[branch_3, 1] = (m20[branch_3] + m02[branch_3]) * branch_3_t_rsqrt
+    qu[branch_3, 2] = (m12[branch_3] + m21[branch_3]) * branch_3_t_rsqrt
+    qu[branch_3, 3] = branch_3_t * branch_3_t_rsqrt
+    qu[branch_3, 0] = (m01[branch_3] - m10[branch_3]) * branch_3_t_rsqrt
 
-    return best_quats.view(batch_dim + (4,))
+    qu[branch_4, 1] = (m12[branch_4] - m21[branch_4]) * branch_4_t_rsqrt
+    qu[branch_4, 2] = (m20[branch_4] - m02[branch_4]) * branch_4_t_rsqrt
+    qu[branch_4, 3] = (m01[branch_4] - m10[branch_4]) * branch_4_t_rsqrt
+    qu[branch_4, 0] = branch_4_t * branch_4_t_rsqrt
+
+    # guarantee the correct axis signs
+    qu[..., 0] = torch.abs(qu[..., 0])
+    qu[..., 1] = qu[..., 1].copysign((m21 - m12))
+    qu[..., 2] = qu[..., 2].copysign((m02 - m20))
+    qu[..., 3] = qu[..., 3].copysign((m10 - m01))
+
+    return qu
 
 
 @torch.jit.script
@@ -349,8 +362,8 @@ def om2ax(matrix: Tensor) -> Tensor:
 
     batch_dim = matrix.shape[:-2]
 
-    # set the output
-    axis = torch.empty((matrix.shape[0], 4), dtype=matrix.dtype, device=matrix.device)
+    # set the output with the same batch dimensions as the input
+    axis = torch.empty(batch_dim + (4,), dtype=matrix.dtype, device=matrix.device)
 
     # Get the trace of the matrix
     trace = matrix[..., 0, 0] + matrix[..., 1, 1] + matrix[..., 2, 2]
@@ -362,17 +375,17 @@ def om2ax(matrix: Tensor) -> Tensor:
 
     # where the angle is small, treat theta/sin(theta) as 1
     stable = theta > 0.001
-    axis[:, 0] = matrix[..., 2, 1] - matrix[..., 1, 2]
-    axis[:, 1] = matrix[..., 0, 2] - matrix[..., 2, 0]
-    axis[:, 2] = matrix[..., 1, 0] - matrix[..., 0, 1]
+    axis[..., 0] = matrix[..., 2, 1] - matrix[..., 1, 2]
+    axis[..., 1] = matrix[..., 0, 2] - matrix[..., 2, 0]
+    axis[..., 2] = matrix[..., 1, 0] - matrix[..., 0, 1]
     factor = torch.where(stable, 0.5 / torch.sin(theta), 0.5)
-    axis[:, :3] = factor[:, None] * axis[:, :3]
+    axis[..., :3] = factor[:, None] * axis[:, :3]
 
     # normalize the axis
-    axis[:, :3] /= torch.norm(axis[:, :3], dim=-1, keepdim=True)
+    axis[..., :3] /= torch.norm(axis[:, :3], dim=-1, keepdim=True)
 
     # set the angle
-    axis[:, 3] = theta
+    axis[..., 3] = theta
 
     return axis.view(batch_dim + (4,))
 
@@ -636,73 +649,164 @@ def ho2cu(ho: Tensor) -> Tensor:
     return cu
 
 
+# @torch.jit.script
+# def ho2ax(ho: Tensor) -> Tensor:
+#     """
+#     Converts a set of homochoric vectors to axis-angle representation.
+
+#     Args:
+#         ho (Tensor): shape (..., 3) homochoric coordinates (x, y, z)
+
+#     Returns:
+#         torch.Tensor: shape (..., 4) axis-angles (x, y, z, angle)
+
+#     """
+#     fit_parameters = torch.tensor(
+#         [
+# 0.9999999999999968,
+# -0.49999999999986866,
+# -0.025000000000632055,
+# -0.003928571496460683,
+# -0.0008164666077062752,
+# -0.00019411896443261646,
+# -0.00004985822229871769,
+# -0.000014164962366386031,
+# -1.9000248160936107e-6,
+# -5.72184549898506e-6,
+# 7.772149920658778e-6,
+# -0.00001053483452909705,
+# 9.528014229335313e-6,
+# -5.660288876265125e-6,
+# 1.2844901692764126e-6,
+# 1.1255185726258763e-6,
+# -1.3834391419956455e-6,
+# 7.513691751164847e-7,
+# -2.401996891720091e-7,
+# 4.386887017466388e-8,
+# -3.5917775353564864e-9,
+#         ],
+#         dtype=torch.float64,
+#         device=ho.device,
+#     ).to(ho.dtype)
+
+#     ho_norm_sq = torch.sum(ho**2, dim=-1, keepdim=True)
+
+#     s = torch.sum(
+#         fit_parameters
+#         * ho_norm_sq ** torch.arange(len(fit_parameters), dtype=ho.dtype),
+#         dim=-1,
+#     )
+
+#     ax = torch.empty(ho.shape[:-1] + (4,), dtype=ho.dtype, device=ho.device)
+
+#     mask_identity = torch.abs(ho_norm_sq.squeeze(-1)) < 1e-8
+#     ax[mask_identity, 0:1] = 0.0
+#     ax[mask_identity, 1:2] = 0.0
+#     ax[mask_identity, 2:3] = 1.0
+
+#     mask_large = ~mask_identity
+#     ax[mask_large, :3] = ho[mask_large, :] * torch.rsqrt(ho_norm_sq[mask_large])
+
+#     ax[..., 3] = torch.where(
+#         mask_large,
+#         2.0 * torch.arccos(torch.clamp(s, -1.0, 1.0)),
+#         0,
+#     )
+
+#     return ax
+
+
 @torch.jit.script
 def ho2ax(ho: Tensor) -> Tensor:
     """
     Converts a set of homochoric vectors to axis-angle representation.
 
+    I have seen two polynomial fits for this conversion, one from EMsoft
+    and the other from Kikuchipy. The Kikuchipy one is used here.
+
+
     Args:
-        ho (Tensor): A tensor of shape (N, 3) containing N homochoric vectors.
+        ho (Tensor): shape (..., 3) homochoric coordinates (x, y, z)
 
     Returns:
-        torch.Tensor: A tensor of shape (N, 4) containing the corresponding axis-angle representations.
-            The first three columns contain the axis of rotation, and the fourth column contains the angle
-            of rotation in radians.
+        torch.Tensor: shape (..., 4) axis-angles (x, y, z, angle)
+
+
+    Notes:
+
+    f(w) = [(3/4) * (w - sin(w))]^(1/3) -> no inverse -> polynomial fit it
+
     """
-    # Constants stolen directly from EMsoft
+
     fit_parameters = torch.tensor(
         [
-            0.9999999999999968,
-            -0.49999999999986866,
-            -0.025000000000632055,
-            -0.003928571496460683,
-            -0.0008164666077062752,
-            -0.00019411896443261646,
-            -0.00004985822229871769,
-            -0.000014164962366386031,
-            -1.9000248160936107e-6,
-            -5.72184549898506e-6,
-            7.772149920658778e-6,
-            -0.00001053483452909705,
-            9.528014229335313e-6,
-            -5.660288876265125e-6,
-            1.2844901692764126e-6,
-            1.1255185726258763e-6,
-            -1.3834391419956455e-6,
-            7.513691751164847e-7,
-            -2.401996891720091e-7,
-            4.386887017466388e-8,
-            -3.5917775353564864e-9,
+            # Kikuchipy polyfit coeffs
+            1.0000000000018852,
+            -0.5000000002194847,
+            -0.024999992127593126,
+            -0.003928701544781374,
+            -0.0008152701535450438,
+            -0.0002009500426119712,
+            -0.00002397986776071756,
+            -0.00008202868926605841,
+            0.00012448715042090092,
+            -0.0001749114214822577,
+            0.0001703481934140054,
+            -0.00012062065004116828,
+            0.000059719705868660826,
+            -0.00001980756723965647,
+            0.000003953714684212874,
+            -0.00000036555001439719544,
+            # # EMsoft polyfit coeffs
+            # 0.9999999999999968,
+            # -0.49999999999986866,
+            # -0.025000000000632055,
+            # -0.003928571496460683,
+            # -0.0008164666077062752,
+            # -0.00019411896443261646,
+            # -0.00004985822229871769,
+            # -0.000014164962366386031,
+            # -1.9000248160936107e-6,
+            # -5.72184549898506e-6,
+            # 7.772149920658778e-6,
+            # -0.00001053483452909705,
+            # 9.528014229335313e-6,
+            # -5.660288876265125e-6,
+            # 1.2844901692764126e-6,
+            # 1.1255185726258763e-6,
+            # -1.3834391419956455e-6,
+            # 7.513691751164847e-7,
+            # -2.401996891720091e-7,
+            # 4.386887017466388e-8,
+            # -3.5917775353564864e-9,
         ],
-        dtype=ho.dtype,
+        dtype=torch.float64,
         device=ho.device,
+    ).to(ho.dtype)
+
+    ho_norm_sq = torch.sum(ho**2, dim=-1, keepdim=True)
+
+    s = torch.sum(
+        fit_parameters
+        * ho_norm_sq ** torch.arange(len(fit_parameters), dtype=ho.dtype),
+        dim=-1,
     )
 
-    ho_magnitude = torch.sum(ho**2, dim=1)
+    ax = torch.empty(ho.shape[:-1] + (4,), dtype=ho.dtype, device=ho.device)
 
-    mask_zero = torch.abs(ho_magnitude) < 1e-8
-    ax = torch.zeros((ho.shape[0], 4), dtype=ho.dtype, device=ho.device)
-    ax[mask_zero, 2] = 1
+    rot_is_identity = torch.abs(ho_norm_sq.squeeze(-1)) < 1e-8
+    ax[rot_is_identity, 0:1] = 0.0
+    ax[rot_is_identity, 1:2] = 0.0
+    ax[rot_is_identity, 2:3] = 1.0
 
-    ho_magnitude = torch.sum(ho**2, dim=1)
-    ho_magnitude[mask_zero] = 1.0  # Avoid division by zero
-
-    hom = ho_magnitude
-    s = fit_parameters[0] + fit_parameters[1] * hom
-    for i in range(2, 21):
-        hom = hom * ho_magnitude
-        s = s + fit_parameters[i] * hom
-
-    hon = ho / torch.sqrt(ho_magnitude).unsqueeze(1)
-    s = 2 * torch.acos(s)
-
-    # the axis is inherited no matter what
-    ax[~mask_zero, :3] = hon[~mask_zero]
-    # if we are at pi condition
-    mask_pi = torch.abs(s - torch.pi) < 1e-8
-    ax[~mask_zero & mask_pi, 3] = torch.pi
-    # rest are normal
-    ax[~mask_zero & ~mask_pi, 3] = s[~mask_zero & ~mask_pi]
+    ax[~rot_is_identity, :3] = ho[~rot_is_identity, :] * torch.rsqrt(
+        ho_norm_sq[~rot_is_identity]
+    )
+    ax[..., 3] = torch.where(
+        ~rot_is_identity,
+        2.0 * torch.arccos(torch.clamp(s, -1.0, 1.0)),
+        0,
+    )
     return ax
 
 
@@ -712,11 +816,10 @@ def ax2ho(ax: Tensor) -> Tensor:
     Converts axis-angle representation to homochoric representation.
 
     Args:
-        ax (Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
-            Each row represents an axis-angle representation in the format (x, y, z, angle).
+        ax (Tensor): shape (..., 4) axis-angle (x, y, z, angle)
 
     Returns:
-        torch.Tensor: Tensor of shape (N, 3) where N is the number of homochoric vectors.
+        torch.Tensor: shape (..., 3) homochoric coordinates (x, y, z)
     """
     f = (0.75 * (ax[..., 3:4] - torch.sin(ax[..., 3:4]))) ** (1.0 / 3.0)
     ho = ax[..., :3] * f
@@ -729,24 +832,13 @@ def ax2ro(ax: Tensor) -> Tensor:
     Converts axis-angle representation to Rodrigues vector representation.
 
     Args:
-        ax (Tensor): Tensor of shape (N, 4) representing N axis-angle vectors.
+        ax (Tensor): shape (..., 4) axis-angle (x, y, z, angle)
 
     Returns:
-        torch.Tensor: Tensor of shape (N, 4) representing N Rodrigues vectors.
+        torch.Tensor: shape (..., 4) Rodrigues-Frank (x, y, z, tan(angle/2))
     """
-    ro = torch.zeros(ax.shape[0], 4, dtype=ax.dtype, device=ax.device)
-    angle = ax[:, 3]
-    mask_zero_angle = torch.abs(angle) < 1e-8
-    ro[mask_zero_angle, 2] = 1.0
-
-    mask_nonzero_angle = ~mask_zero_angle
-    ro[mask_nonzero_angle, :3] = ax[mask_nonzero_angle, :3]
-
-    mask_pi = torch.abs(angle - torch.pi) < 1e-7
-    ro[mask_pi, 3] = float("inf")
-
-    mask_else = mask_nonzero_angle & (~mask_pi)
-    ro[mask_else, 3] = torch.tan(angle[mask_else] * 0.5)
+    ro = ax.clone()
+    ro[..., 3] = torch.tan(ax[..., 3] / 2)
     return ro
 
 
@@ -756,22 +848,23 @@ def ro2ax(ro: Tensor) -> Tensor:
     Converts a rotation vector to an axis-angle representation.
 
     Args:
-        ro (Tensor): A tensor of shape (N, 4) Rodrigues vectors.
+        ro (Tensor): shape (..., 4) Rodrigues-Frank (x, y, z, tan(angle/2)).
 
     Returns:
-        torch.Tensor: A tensor of shape (N, 4) axis-angle representations.
+        torch.Tensor: shape (..., 4) axis-angles (x, y, z, angle).
     """
-    ax = torch.zeros(ro.shape[0], 4, dtype=ro.dtype, device=ro.device)
-    mask_zero_ro = torch.abs(ro[:, 3]) < 1e-8
+    ax = torch.empty_like(ro)
+    mask_zero_ro = torch.abs(ro[..., 3]) == 0
     ax[mask_zero_ro] = torch.tensor([0, 0, 1, 0], dtype=ro.dtype, device=ro.device)
 
-    mask_inf_ro = torch.isinf(ro[:, 3])
+    mask_inf_ro = torch.isinf(ro[..., 3])
     ax[mask_inf_ro, :3] = ro[mask_inf_ro, :3]
     ax[mask_inf_ro, 3] = torch.pi
 
     mask_else = ~(mask_zero_ro | mask_inf_ro)
-    norm = torch.sqrt(torch.sum(ro[mask_else, :3] ** 2, dim=1))
-    ax[mask_else, :3] = ro[mask_else, :3] / norm.unsqueeze(1)
+    ax[mask_else, :3] = ro[mask_else, :3] / torch.norm(
+        ro[mask_else, :3], dim=-1, keepdim=True
+    )
     ax[mask_else, 3] = 2 * torch.atan(ro[mask_else, 3])
     return ax
 
@@ -782,27 +875,17 @@ def ax2qu(ax: Tensor) -> Tensor:
     Converts axis-angle representation to quaternion representation.
 
     Args:
-        ax (Tensor): Tensor of shape (N, 4) where N is the number of axis-angle representations.
-            Each row represents an axis-angle representation in the format (x, y, z, angle).
+        ax (Tensor): shape (..., 4) axis-angle in the format (x, y, z, angle).
 
     Returns:
-        torch.Tensor: Tensor of shape (N, 4) where N is the number of quaternions.
-            Each row represents a quaternion in the format (w, x, y, z).
+        torch.Tensor: shape (..., 4) quaternions in the format (w, x, y, z).
     """
-    qu = torch.zeros(ax.shape[0], 4, dtype=ax.dtype, device=ax.device)
-    angle = ax[:, 3]
-    mask_zero_angle = (angle > -1e-12) & (angle < 1e-12)
-    qu[mask_zero_angle, 0] = 1.0
-
-    mask_nonzero_angle = ~mask_zero_angle
-    c = torch.cos(angle[mask_nonzero_angle] * 0.5)
-    s = torch.sin(angle[mask_nonzero_angle] * 0.5)
-    qu[mask_nonzero_angle, 0] = c
-    qu[mask_nonzero_angle, 1:] = ax[mask_nonzero_angle, :3] * s.unsqueeze(1)
-
-    # normalize the quaternions
-    qu_norm = qu / torch.norm(qu, dim=1, keepdim=True)
-    return qu_norm
+    qu = torch.empty_like(ax)
+    cos_half_ang = torch.cos(ax[..., 3] / 2.0)
+    sin_half_ang = torch.sin(ax[..., 3:4] / 2.0)
+    qu[..., 0] = cos_half_ang
+    qu[..., 1:] = ax[..., :3] * sin_half_ang
+    return qu
 
 
 @torch.jit.script
@@ -811,34 +894,30 @@ def qu2ax(qu: Tensor) -> Tensor:
     Converts quaternion representation to axis-angle representation.
 
     Args:
-        qu (Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
-            Each row represents a quaternion in the format (w, x, y, z).
+        qu (Tensor): shape (..., 4) quaternions in the format (w, x, y, z).
 
     Returns:
-        torch.Tensor: Tensor of shape (N, 4) where N is the number of axis-angle representations.
-            Each row represents an axis-angle representation in the format (x, y, z, angle).
+        torch.Tensor: shape (..., 4) axis-angle in the format (x, y, z, angle).
     """
-    ax = torch.zeros(qu.shape[0], 4, dtype=qu.dtype, device=qu.device)
 
-    w = qu[:, 0]
+    ax = torch.empty_like(qu)
+    angle = 2 * torch.acos(torch.clamp(qu[..., 0], min=-1.0, max=1.0))
 
-    # Scale similar to the numpy version
-    s = torch.sign(w) / torch.norm(qu[:, 1:], dim=-1)
-
-    # Omega computation, which is the angle
-    omega = 2.0 * torch.acos(torch.clamp(w, min=-1.0, max=1.0))
-
-    # Assign values based on the scalar part condition
-    mask = w.abs() < 1e-12
-    ax[mask, :3] = qu[mask, 1:]
-    ax[~mask, :3] = qu[~mask, 1:] * s[~mask][:, None]
-    ax[~mask, 3] = omega[~mask]
-
-    # Handle the special case where scalar part is close to 1
-    mask_special_case = (w - 1.0).abs() < 1e-15
-    ax[mask_special_case] = torch.tensor(
-        [0.0, 0.0, 1.0, 0.0], dtype=qu.dtype, device=qu.device
+    s = torch.where(
+        qu[..., 0:1] != 0,
+        torch.sign(qu[..., 0:1]) / torch.norm(qu[..., 1:], dim=-1, keepdim=True),
+        1.0,
     )
+
+    ax[..., :3] = qu[..., 1:] * s
+    ax[..., 3] = angle
+
+    # fix identity quaternions to be about z axis
+    mask_identity = angle == 0.0
+    ax[mask_identity, 0] = 0.0
+    ax[mask_identity, 1] = 0.0
+    ax[mask_identity, 2] = 1.0
+    ax[mask_identity, 3] = 0.0
 
     return ax
 
@@ -849,26 +928,30 @@ def qu2ro(qu: Tensor) -> Tensor:
     Converts quaternion representation to Rodrigues-Frank vector representation.
 
     Args:
-        qu (Tensor): Tensor of shape (N, 4) where N is the number of quaternions.
+        qu (Tensor): Tensor of shape (..., 4) where N is the number of quaternions.
             Each row represents a quaternion in the format (w, x, y, z).
 
     Returns:
-        torch.Tensor: Tensor of shape (N, 4) where N is the number of Rodrigues-Frank vectors.
+        torch.Tensor: Tensor of shape (..., 4) where N is the number of Rodrigues-Frank vectors.
             Each row represents a Rodrigues-Frank vector representation.
     """
-    s = torch.norm(qu[:, 1:], dim=1, keepdim=True)
-    ro = torch.zeros_like(qu)
+    ro = torch.empty_like(qu)
 
     # Handle general case
-    w_clipped = torch.clamp(qu[:, 0:1], min=-1.0, max=1.0)
-    tan_part = torch.tan(torch.acos(w_clipped))
-    ro[:, :3] = qu[:, 1:4] / s
-    ro[:, 3] = tan_part[:, 0]
+    ro[..., :3] = qu[..., 1:] * torch.rsqrt(
+        torch.sum(qu[..., 1:] ** 2, dim=-1, keepdim=True)
+    )
+    ro[..., 3] = torch.tan(torch.acos(torch.clamp(qu[..., 0], min=-1.0, max=1.0)))
+
+    # w < 1e-8 for float32 / w < 1e-10 for float64 -> infinite tan
+    eps = 1e-8 if qu.dtype == torch.float32 else 1e-10
+    mask_zero = torch.abs(qu[..., 0]) < eps
+    ro[mask_zero, 3] = float("inf")
     return ro
 
 
 @torch.jit.script
-def qu2om(quaternions: Tensor) -> Tensor:
+def qu2om(qu: Tensor) -> Tensor:
     """
     Convert rotations given as quaternions to rotation matrices.
 
@@ -878,43 +961,22 @@ def qu2om(quaternions: Tensor) -> Tensor:
     Returns:
         Rotation matrices as tensor of shape (..., 3, 3).
     """
-    r, i, j, k = torch.unbind(quaternions, -1)
-    two_s = 2.0 / (quaternions * quaternions).sum(-1)
+    q_bar = qu[..., 0] ** 2 - torch.sum(qu[..., 1:] ** 2, dim=-1)
+    matrix = torch.empty(qu.shape[:-1] + (3, 3), dtype=qu.dtype, device=qu.device)
 
-    o = torch.stack(
-        (
-            1 - two_s * (j * j + k * k),
-            two_s * (i * j - k * r),
-            two_s * (i * k + j * r),
-            two_s * (i * j + k * r),
-            1 - two_s * (i * i + k * k),
-            two_s * (j * k - i * r),
-            two_s * (i * k - j * r),
-            two_s * (j * k + i * r),
-            1 - two_s * (i * i + j * j),
-        ),
-        -1,
-    )
-    return o.reshape(quaternions.shape[:-1] + (3, 3))
+    matrix[..., 0, 0] = q_bar + 2 * qu[..., 1] ** 2
+    matrix[..., 0, 1] = 2 * (qu[..., 1] * qu[..., 2] - qu[..., 0] * qu[..., 3])
+    matrix[..., 0, 2] = 2 * (qu[..., 1] * qu[..., 3] + qu[..., 0] * qu[..., 2])
 
+    matrix[..., 1, 0] = 2 * (qu[..., 2] * qu[..., 1] + qu[..., 0] * qu[..., 3])
+    matrix[..., 1, 1] = q_bar + 2 * qu[..., 2] ** 2
+    matrix[..., 1, 2] = 2 * (qu[..., 2] * qu[..., 3] - qu[..., 0] * qu[..., 1])
 
-@torch.jit.script
-def _copysign(a: Tensor, b: Tensor) -> Tensor:
-    """
-    Return a tensor where each element has the absolute value taken from the,
-    corresponding element of a, with sign taken from the corresponding
-    element of b. This is like the standard copysign floating-point operation,
-    but is not careful about negative 0 and NaN.
+    matrix[..., 2, 0] = 2 * (qu[..., 3] * qu[..., 1] - qu[..., 0] * qu[..., 2])
+    matrix[..., 2, 1] = 2 * (qu[..., 3] * qu[..., 2] + qu[..., 0] * qu[..., 1])
+    matrix[..., 2, 2] = q_bar + 2 * qu[..., 3] ** 2
 
-    Args:
-        a: source tensor.
-        b: tensor whose signs will be used, of the same shape as a.
-
-    Returns:
-        Tensor of the same shape as a with the signs of b.
-    """
-    signs_differ = (a < 0) != (b < 0)
-    return torch.where(signs_differ, -a, a)
+    return matrix
 
 
 @torch.jit.script
