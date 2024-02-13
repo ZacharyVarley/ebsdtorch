@@ -1,3 +1,14 @@
+"""
+
+Virtual extended precision arithmetic useful for Wigner d recursion. See:
+
+"Numerical computation of spherical harmonics of arbitrary degree and order by
+extending exponent of floating point numbers"
+
+https://doi.org/10.1007/s00190-011-0519-2
+
+"""
+
 from typing import Tuple
 import torch
 from torch import Tensor
@@ -144,23 +155,3 @@ def xlsum2(
     z, iz = x_norm(z, iz)
 
     return z, iz
-
-
-# # test out the functions
-# x = torch.tensor([2.0,], dtype=torch.float64)
-# print(f"x: {x}")
-# ix = torch.tensor([0,], dtype=torch.int32)
-# x, ix = x_norm(x, ix)
-# print(f"x-number mantissas: {x}")
-# print(f"x-number exponents: {ix}")
-# x_reconstructed = x2f(x, ix)
-# print(f"x reconstructed: {x_reconstructed}")
-
-# f = torch.tensor(1.0, dtype=torch.float64)
-# g = torch.tensor(1.0, dtype=torch.float64)
-
-# for index in range(1, 2000):
-#     x, ix = xlsum2(f, g, x, ix, x, ix)
-#     if index % 100 == 99:
-#         x_reconstructed = x2f(x, ix)
-#         print(f"power: {index+1} x: {x} ix: {ix} x reconstructed: {x_reconstructed}")
