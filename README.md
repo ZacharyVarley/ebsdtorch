@@ -5,7 +5,7 @@
 [![GitHub - License](https://img.shields.io/github/license/ZacharyVarley/ebsdtorch)](https://github.com/ZacharyVarley/ebsdtorch/blob/main/LICENSE)
 [![PyPI - Downloads](https://img.shields.io/pypi/dm/ebsdtorch)](https://pypi.org/project/ebsdtorch/)
 
-PyTorch-only library for electron backscatter diffraction (EBSD) patterns.
+PyTorch-only library for electron backscatter diffraction (EBSD)
 
 ## Installation
 
