@@ -1,6 +1,6 @@
 import torch
 import pytest
-from ebsdtorch.wigner.wigner_d import build_jkm_volume
+from ebsdtorch.wigner.wigner_d_general import build_jkm_volume
 
 test_parameters = [
     # test case taken from http://dx.doi.org/10.13140/RG.2.2.31922.20160

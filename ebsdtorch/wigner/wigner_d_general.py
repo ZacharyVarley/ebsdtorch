@@ -18,6 +18,10 @@
 
     Both by Toshio Fukushima.
 
+    ---------------------------------------------
+    -----**All Notations Follow Fukushima**------
+    ---------------------------------------------
+
     -------------------
 
     I ended up directly porting the F90 code from the second paper, including
@@ -58,21 +62,21 @@
 
     2) Negating k and m yields -1 to (k-m) power prefactor
 
-    d^j_-k_-m = (-1)^(k-m) d^j_km
+    d^j_-k_-m = (-1)^(k-m) d^j_k_m
 
 
     3) Negating m yields -1 to (j + k + 2m) power prefactor / angle supplement
 
-    d^j_k_-m(BETA) = (-1)^(j + k + 2m) d^j_km(π - BETA)
+    d^j_k_-m(BETA) = (-1)^(j + k + 2m) d^j_k_m(π - BETA)
 
 
     4) Negating k yields -1 to (j + 2k + 3m) power prefactor / angle supplement
 
-    d^j_-k_m(BETA) = (-1)^(j + 2k + 3m) d^j_km(π - BETA)
+    d^j_-k_m(BETA) = (-1)^(j + 2k + 3m) d^j_k_m(π - BETA)
 
 
     5) Swapping k and m yields -1 to (k-m) power prefactor
-    d^j_m_k = (-1)^(k-m) d^j_km
+    d^j_m_k = (-1)^(k-m) d^j_k_m
 
 """
 
@@ -105,14 +109,12 @@ def trig_powers(
 
     """
 
-    # powers up to 2^53 can be exactly represented in float64
+    # values up to 2^53 can be exactly represented in float64
     powers = torch.arange(0, largest_power + 1, dtype=torch.float64, device=device)
 
+    # beta is in the range [0, pi] so sh and ch are always non-negative
     ch = torch.cos(beta / 2.0)
     sh = torch.sin(beta / 2.0)
-
-    ch_sign = torch.sign(ch)
-    sh_sign = torch.sign(sh)
 
     # log2 of magnitude of cos(beta/2) and sin(beta/2)
     lmch = torch.log2(torch.abs(ch))
@@ -134,8 +136,8 @@ def trig_powers(
     sin_powers_x_i = ((torch.abs(log_sin_powers) // 960) * lmsh_sign).to(torch.int32)
 
     # calculate the x-number mantissas
-    cos_powers_x = torch.pow(2.0, log_cos_powers_x * lmch_sign) * ch_sign
-    sin_powers_x = torch.pow(2.0, log_sin_powers_x * lmsh_sign) * sh_sign
+    cos_powers_x = torch.pow(2.0, log_cos_powers_x * lmch_sign)
+    sin_powers_x = torch.pow(2.0, log_sin_powers_x * lmsh_sign)
 
     # call x_norm to normalize the x-numbers
     cos_powers_x, cos_powers_x_i = x_norm(cos_powers_x, cos_powers_x_i)
@@ -203,68 +205,73 @@ def build_km_seed_table(
     # removing the bottleneck by iterating column by column using vectorized operations
     for k_index in range(order_max + 1, dtype=torch.int32, device=device):
 
-        # find where k2 is equal to m2
-        first_mask = coords == coords[k_index]
-        valid_mask = coords < coords[k_index]
+        # find where k2 is equal to m2 or greater than m2
+        # these masks only split the update of the e_km terms
+        mask_k2_eq_m2 = coords[k_index] == coords
+        mask_k2_gr_m2 = coords[k_index] > coords
+
+        # find valid mask
+        mask_valid = mask_k2_eq_m2 | mask_k2_gr_m2
 
         # find valid m coords
-        valid_m_coords = coords_fp[valid_mask]
+        valid_m_coords_fp = coords_fp[mask_valid]
 
         # update the e_km terms for k2 == m2 case
-        e_km_x_col[first_mask] = 1.0
-        e_km_x_i_col[first_mask] = 0
+        e_km_x_col[mask_k2_eq_m2] = 1.0
+        e_km_x_i_col[mask_k2_eq_m2] = 0
 
         # for k2 > m2 case update the e_km terms
         # f = (k2.double() * (k2.double() - 1)) / (kpm.double() * kmm.double())
         f = (
-            k2_coords_fp[k_index, valid_mask] * (k2_coords_fp[k_index, valid_mask] - 1)
-        ) / (kpm_fp[k_index, valid_mask] * kmm_fp[k_index, valid_mask])
-        e_km_x_col[valid_mask] = e_km_x_col[valid_mask] * f**0.5
+            k2_coords_fp[k_index, mask_k2_gr_m2]
+            * (k2_coords_fp[k_index, mask_k2_gr_m2] - 1)
+        ) / (kpm_fp[k_index, mask_k2_gr_m2] * kmm_fp[k_index, mask_k2_gr_m2])
 
-        # norm the e_km terms where k2 > m2
-        e_km_x_col[valid_mask], e_km_x_i_col[valid_mask] = x_norm(
-            e_km_x_col[valid_mask], e_km_x_i_col[valid_mask]
+        # update the e_km terms
+        e_km_x_col[mask_k2_gr_m2] = e_km_x_col[mask_k2_gr_m2] * f**0.5
+        e_km_x_col[mask_k2_gr_m2], e_km_x_i_col[mask_k2_gr_m2] = x_norm(
+            e_km_x_col[mask_k2_gr_m2], e_km_x_i_col[mask_k2_gr_m2]
         )
 
         # start by multiplying by the cosine power and sine power
         dk_km = (
-            cos_powers_x[kpm[k_index, valid_mask]]
-            * sin_powers_x[kmm[k_index, valid_mask]]
+            cos_powers_x[kpm[k_index, mask_valid]]
+            * sin_powers_x[kmm[k_index, mask_valid]]
         )
         dk_km_i = (
-            cos_powers_x_i[kpm[k_index, valid_mask]]
-            + sin_powers_x_i[kmm[k_index, valid_mask]]
+            cos_powers_x_i[kpm[k_index, mask_valid]]
+            + sin_powers_x_i[kmm[k_index, mask_valid]]
         )
         dk_km, dk_km_i = x_norm(dk_km, dk_km_i)
 
         # multiply by the e_km term
-        dk_km = dk_km * e_km_x_col[valid_mask]
-        dk_km_i = dk_km_i + e_km_x_i_col[valid_mask]
+        dk_km = dk_km * e_km_x_col[mask_valid]
+        dk_km_i = dk_km_i + e_km_x_i_col[mask_valid]
         dk_km, dk_km_i = x_norm(dk_km, dk_km_i)
 
         # add to the table
-        output_dk_km[k_index, valid_mask] = dk_km
-        output_dk_km_i[k_index, valid_mask] = dk_km_i
+        output_dk_km[k_index, mask_valid] = dk_km
+        output_dk_km_i[k_index, mask_valid] = dk_km_i
 
         # do the first iteration outside of the loop because it is a special case
         if 0 <= beta < (torch.pi / 2.0):
             tc = 2.0 * torch.sin(beta / 2.0) ** 2
-            u_km = (k2_coords_fp[k_index, valid_mask] - valid_m_coords + 2) - (
-                k2_coords_fp[k_index, valid_mask] + 2
+            u_km = (k2_coords_fp[k_index, mask_valid] - valid_m_coords_fp + 2) - (
+                k2_coords_fp[k_index, mask_valid] + 2
             ) * tc
         elif beta == (torch.pi / 2.0):
-            u_km = -1.0 * valid_m_coords
+            u_km = -1.0 * valid_m_coords_fp
         else:
-            u_km = (k2_coords_fp[k_index, valid_mask] + 2) * torch.cos(
+            u_km = (k2_coords_fp[k_index, mask_valid] + 2) * torch.cos(
                 beta
-            ) - valid_m_coords
+            ) - valid_m_coords_fp
 
         # a_km = ( (k2 + 1).double() / ((k2 + m2 + 2).double() * (k2 - m2 + 2).double())) ** 0.5 * u_km
         a_km = (
-            (k2_coords_fp[k_index, valid_mask] + 1)
+            (k2_coords_fp[k_index, mask_valid] + 1)
             / (
-                (k2_coords_fp[k_index, valid_mask] + valid_m_coords + 2)
-                * (k2_coords_fp[k_index, valid_mask] - valid_m_coords + 2)
+                (k2_coords_fp[k_index, mask_valid] + valid_m_coords_fp + 2)
+                * (k2_coords_fp[k_index, mask_valid] - valid_m_coords_fp + 2)
             )
         ) ** 0.5 * u_km
 
@@ -274,8 +281,14 @@ def build_km_seed_table(
         d_kp1_km, d_kp1_km_i = x_norm(d_kp1_km, d_kp1_km_i)
 
         # add to the table
-        output_d_kp1_km[k_index, valid_mask] = d_kp1_km
-        output_d_kp1_km_i[k_index, valid_mask] = d_kp1_km_i
+        output_d_kp1_km[k_index, mask_valid] = d_kp1_km
+        output_d_kp1_km_i[k_index, mask_valid] = d_kp1_km_i
+
+    print("Computed build_km_seed_table")
+    print("output_dk_km", output_dk_km)
+    print("output_dk_km_i", output_dk_km_i)
+    print("output_d_kp1_km", output_d_kp1_km)
+    print("output_d_kp1_km_i", output_d_kp1_km_i)
 
     return output_dk_km, output_dk_km_i, output_d_kp1_km, output_d_kp1_km_i
 
