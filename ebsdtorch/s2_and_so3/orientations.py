@@ -951,6 +951,82 @@ def qu2ro(qu: Tensor) -> Tensor:
 
 
 @torch.jit.script
+def qu2bu(qu: Tensor) -> Tensor:
+    """
+    Convert rotations given as quaternions to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        qu (Tensor): shape (..., 4) quaternions in the format (w, x, y, z).
+
+    Returns:
+        torch.Tensor: shape (..., 3) Bunge angles in radians.
+    """
+
+    bu = torch.empty(qu.shape[:-1] + (3,), dtype=qu.dtype, device=qu.device)
+
+    q03 = qu[..., 0] ** 2 + qu[..., 3] ** 2
+    q12 = qu[..., 1] ** 2 + qu[..., 2] ** 2
+    chi = torch.sqrt((q03 * q12))
+
+    mask_chi_zero = chi == 0
+    mA = (mask_chi_zero) & (q12 == 0)
+    mB = (mask_chi_zero) & (q03 == 0)
+    mC = ~mask_chi_zero
+
+    bu[mA, 0] = torch.atan2(-2 * qu[mA, 0] * qu[mA, 3], qu[mA, 0] ** 2 - qu[mA, 3] ** 2)
+    bu[mA, 1] = 0
+    bu[mA, 2] = 0
+
+    bu[mB, 0] = torch.atan2(2 * qu[mB, 1] * qu[mB, 2], qu[mB, 1] ** 2 - qu[mB, 2] ** 2)
+    bu[mB, 1] = torch.pi
+    bu[mB, 2] = 0
+
+    bu[mC, 0] = torch.atan2(
+        (qu[mC, 1] * qu[mC, 3] - qu[mC, 0] * qu[mC, 2]) / chi[mC],
+        (-qu[mC, 0] * qu[mC, 1] - qu[mC, 2] * qu[mC, 3]) / chi[mC],
+    )
+    bu[mC, 1] = torch.atan2(2 * chi[mC], q03[mC] - q12[mC])
+    bu[mC, 2] = torch.atan2(
+        (qu[mC, 0] * qu[mC, 2] + qu[mC, 1] * qu[mC, 3]) / chi[mC],
+        (qu[mC, 2] * qu[mC, 3] - qu[mC, 0] * qu[mC, 1]) / chi[mC],
+    )
+
+    # add 2pi to negative angles for first and last angles
+    bu[..., 0] = torch.where(bu[..., 0] < 0, bu[..., 0] + 2 * torch.pi, bu[..., 0])
+    bu[..., 2] = torch.where(bu[..., 2] < 0, bu[..., 2] + 2 * torch.pi, bu[..., 2])
+
+    return bu
+
+
+@torch.jit.script
+def bu2qu(bu: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to quaternions.
+
+    Args:
+        bu (Tensor): shape (..., 3) Bunge angles in radians.
+
+    Returns:
+        torch.Tensor: shape (..., 4) quaternions in the format (w, x, y, z).
+    """
+    qu = torch.empty(bu.shape[:-1] + (4,), dtype=bu.dtype, device=bu.device)
+
+    sigma = 0.5 * (bu[..., 0] + bu[..., 2])
+    delta = 0.5 * (bu[..., 0] - bu[..., 2])
+
+    c = torch.cos(0.5 * bu[..., 1])
+    s = torch.sin(0.5 * bu[..., 1])
+
+    qu[..., 0] = c * torch.cos(sigma)
+    qu[..., 1] = -s * torch.cos(delta)
+    qu[..., 2] = -s * torch.sin(delta)
+    qu[..., 3] = -c * torch.sin(sigma)
+
+    # correct for negative real part of quaternion
+    return standardize_quaternion(qu)
+
+
+@torch.jit.script
 def qu2om(qu: Tensor) -> Tensor:
     """
     Convert rotations given as quaternions to rotation matrices.
