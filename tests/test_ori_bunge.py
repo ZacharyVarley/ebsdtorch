@@ -139,3 +139,29 @@ def test_qu2bu_edge(euler_angles_edge):
     assert torch.all(
         diff < 1e-5
     ), f"{diff.argmax()}: {diff.max()}, {bu[diff.argmax()]}, {eu[diff.argmax()]}"
+
+
+@pytest.fixture
+def test_rand_quaternions():
+
+    # set random seed for reproducibility
+    torch.manual_seed(0)
+
+    # define random quaternions
+    qu_rand = torch.randn(10, 4)
+
+    # add a small offset away from zero in the same direction per axis
+    qu_rand = qu_rand + 1e-3 * torch.sign(qu_rand)
+
+    # normalize the quaternions and set positive real part
+    qu_rand = qu_rand / torch.norm(qu_rand, dim=-1, keepdim=True)
+    qu_rand = qu_rand * torch.where(qu_rand[:, 0] < 0, -1, 1).unsqueeze(-1)
+
+    return qu_rand
+
+
+def test_qu2bu(test_rand_quaternions):
+    qu = test_rand_quaternions
+    bu = qu2bu(qu)
+    qu_recon = bu2qu(bu)
+    assert torch.allclose(qu, qu_recon, atol=1e-5)
