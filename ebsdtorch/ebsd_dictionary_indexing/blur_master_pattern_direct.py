@@ -12,7 +12,7 @@ from ebsdtorch.s2_and_so3.square_projection import (
     inv_rosca_lambert,
 )
 from ebsdtorch.s2_and_so3.orientations import (
-    quaternion_apply,
+    qu_apply,
     quaternion_rotate_sets_sphere,
 )
 from ebsdtorch.s2_and_so3.sampling import s2_fibonacci_lattice
@@ -100,7 +100,7 @@ def annulus_bse_detector(
     # for each point on the master pattern, we rotate the annulus points to that point
     for i in range(0, grid_points_xyz.shape[0], batch_size):
         # rotate the annulus points to the point on the master pattern
-        annulus_points_rotated = quaternion_apply(
+        annulus_points_rotated = qu_apply(
             grid_points_quat[i : i + batch_size, None, :], annulus_points[None, :, :]
         )
 

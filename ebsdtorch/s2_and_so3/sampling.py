@@ -1,5 +1,5 @@
 import torch
-from ebsdtorch.s2_and_so3.orientations import cu2qu, standardize_quaternion
+from ebsdtorch.s2_and_so3.orientations import cu2qu, qu_std
 from ebsdtorch.s2_and_so3.sphere import theta_phi_to_xyz
 
 
@@ -181,7 +181,7 @@ def so3_halton_cubochoric(
         2 / 3
     ) - 0.5 * torch.pi ** (2 / 3)
     qu = cu2qu(cu)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
+    qu = qu_std(qu / torch.norm(qu, dim=-1, keepdim=True))
     return qu
 
 
@@ -203,7 +203,7 @@ def so3_cubochoric_rand(n: int, device: torch.device) -> torch.Tensor:
         2.0 / 3.0
     ) - 0.5 * torch.pi ** (2.0 / 3.0)
     qu = cu2qu(box_sampling)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
+    qu = qu_std(qu / torch.norm(qu, dim=-1, keepdim=True))
     return qu
 
 
@@ -229,5 +229,5 @@ def so3_cubochoric_grid(edge_length: int, device: torch.device):
     )
     cu = torch.stack(torch.meshgrid(cu, cu, cu, indexing="ij"), dim=-1).reshape(-1, 3)
     qu = cu2qu(cu)
-    qu = standardize_quaternion(qu)
+    qu = qu_std(qu)
     return qu

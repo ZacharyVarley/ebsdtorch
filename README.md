@@ -7,13 +7,19 @@
 
 PyTorch-only library for electron backscatter diffraction (EBSD)
 
+**Warning: This library is in early development and is not yet stable.**
+
 ## Installation
 
-To install EBSDTorch, first install PyTorch, then run this command in your terminal:
+First install PyTorch, then install via pip:
 
 ```bash
 pip install ebsdtorch
 ```
+
+## Documentation
+
+Documentation is coming soon...
 
 ## Features (and TODOs)
 
@@ -43,7 +49,7 @@ pip install ebsdtorch
 - :white_large_square: geometry fitting (single camera matrix)
 
 - :white_check_mark: Wigner D matrices
-- :white_large_square: spherical harmonics
+- :white_check_mark: spherical harmonics
 - :white_large_square: SO3 FFT for cross correlation / convolution
 - :white_large_square: EBSD master pattern blur via SO3 FFT (for BSE image simulation)
 

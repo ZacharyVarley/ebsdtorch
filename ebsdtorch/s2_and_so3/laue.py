@@ -1,14 +1,14 @@
 """
 
-This file implements operations for points on the 2-sphere and orientations 
+This file implements operations for points on the 2-sphere and orientations
 represented by unit quaternions, all under given Laue group(s).
 
 Notes:
 
-Image a cube floating in 3D space. The orientation fundamental zone is a unique
-selection of all possible orientings under the symmetry of the cube. This space
-is smaller than the space of all possible orientations something without
-symmetry. Now imagine two cubes floating in 3D space. The misorientation
+Imagine a cube floating in 3D space. The orientation fundamental zone is a
+unique selection of all possible orientings under the symmetry of the cube. This
+space is smaller than the space of all possible orientations of something
+without symmetry. Now imagine two cubes floating in 3D space. The misorientation
 fundamental zone is a unique selection of all relative orientations of the two
 cubes that are unique under the symmetry of the two cubes (the "exchange
 symmetry"). The symmetry of the two objects need not be the same. For example,
@@ -35,12 +35,12 @@ import torch
 from torch import Tensor
 
 from ebsdtorch.s2_and_so3.orientations import (
-    quaternion_multiply,
-    quaternion_real_of_prod,
-    quaternion_apply,
-    quaternion_invert,
-    misorientation_angle,
-    norm_standard_quaternion,
+    qu_prod,
+    qu_prod_pos_real,
+    qu_apply,
+    qu_conj,
+    qu_angle,
+    qu_norm_std,
 )
 from ebsdtorch.s2_and_so3.sphere import xyz_to_theta_phi
 from ebsdtorch.s2_and_so3.sampling import so3_cubochoric_grid, s2_fibonacci_lattice
@@ -50,20 +50,19 @@ from ebsdtorch.s2_and_so3.square_projection import inv_rosca_lambert
 @torch.jit.script
 def get_laue_mult(laue_group: int) -> int:
     """
-    Find multiplicity of a given Laue group (including inversion). The ordering
-    of the Laue groups is as follows:
+    Multiplicity of a given Laue group (including inversion):
 
-    1. C1
-    2. C2
-    3. C3
-    4. C4
-    5. C6
-    6. D2
-    7. D3
-    8. D4
-    9. D6
-    10. T
-    11. O
+    Laue =11] m3‾m, 4‾3m, 432       Cubic      high
+    Laue =10] m3‾, 23               Cubic      low
+    Laue = 9] 6/mmm, 6‾m2, 6mm, 622 Hexagonal  high
+    Laue = 8] 6/m, 6‾, 6            Hexagonal  low
+    Laue = 7] 3‾m                   Trigonal   high
+    Laue = 6] 3m, 32, 3‾, 31        Trigonal   low
+    Laue = 5] 4/mmm, 4‾2m, 4mm, 422 Tetragonal high
+    Laue = 4] 4/m, 4‾, 4            Tetragonal low
+    Laue = 3] mmm, mm2, 222         Orthorhombic
+    Laue = 2] 2/m, m, 2             Monoclinic
+    Laue = 1] 1‾, 1                 Triclinic
 
     Args:
         laue_group: integer between 1 and 11 inclusive
@@ -74,17 +73,17 @@ def get_laue_mult(laue_group: int) -> int:
     """
 
     LAUE_MULTS = [
-        2,
-        4,
-        6,
-        8,
-        12,
-        8,
-        12,
-        16,
-        24,
-        24,
-        48,
+        2,  #   1 - Triclinic
+        4,  #   2 - Monoclinic
+        8,  #   3 - Orthorhombic
+        8,  #   4 - Tetragonal low
+        16,  #  5 - Tetragonal high
+        6,  #   6 - Trigonal low
+        12,  #  7 - Trigonal high
+        12,  #  8 - Hexagonal low
+        24,  #  9 - Hexagonal high
+        24,  # 10 - Cubic low
+        48,  # 11 - Cubic high
     ]
 
     return LAUE_MULTS[laue_group - 1]
@@ -93,23 +92,23 @@ def get_laue_mult(laue_group: int) -> int:
 @torch.jit.script
 def laue_elements(laue_id: int) -> Tensor:
     """
-    Find operators (excluding inversion) of the Laue group specified by the
-    laue_id parameter. The first element is always the identity.
+    Generators for Laue group specified by the laue_id parameter. The first
+    element is always the identity.
+
+    Laue =11] m3‾m, 4‾3m, 432       Cubic      high
+    Laue =10] m3‾, 23               Cubic      low
+    Laue = 9] 6/mmm, 6‾m2, 6mm, 622 Hexagonal  high
+    Laue = 8] 6/m, 6‾, 6            Hexagonal  low
+    Laue = 7] 3‾m                   Trigonal   high
+    Laue = 6] 3m, 32, 3‾, 31        Trigonal   low
+    Laue = 5] 4/mmm, 4‾2m, 4mm, 422 Tetragonal high
+    Laue = 4] 4/m, 4‾, 4            Tetragonal low
+    Laue = 3] mmm, mm2, 222         Orthorhombic
+    Laue = 2] 2/m, m, 2             Monoclinic
+    Laue = 1] 1‾, 1                 Triclinic
 
     Args:
         laue_id: integer between inclusive [1, 11]
-
-    1. C1
-    2. C2
-    3. C3
-    4. C4
-    5. C6
-    6. D2
-    7. D3
-    8. D4
-    9. D6
-    10. T
-    11. O
 
     Returns:
         torch tensor of shape (cardinality, 4) containing the elements of the
@@ -119,15 +118,12 @@ def laue_elements(laue_id: int) -> Tensor:
 
     https://en.wikipedia.org/wiki/Space_group
 
-    https://pd.chem.ucl.ac.uk/pdnn/symm3/allsgp.htm
-
     """
 
     # sqrt(2) / 2 and sqrt(3) / 2
     R2 = 1.0 / (2.0**0.5)
     R3 = (3.0**0.5) / 2.0
 
-    # 7 subsets of O Laue groups (O, T, D4, D2, C4, C2, C1)
     LAUE_O = torch.tensor(
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -174,43 +170,7 @@ def laue_elements(laue_id: int) -> Tensor:
         ],
         dtype=torch.float64,
     )
-    LAUE_D4 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [R2, 0.0, 0.0, R2],
-            [R2, 0.0, 0.0, -R2],
-            [0.0, R2, R2, 0.0],
-            [0.0, -R2, R2, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_D2 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C4 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [R2, 0.0, 0.0, R2],
-            [R2, 0.0, 0.0, -R2],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C2 = torch.tensor(
-        [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=torch.float64
-    )
-    LAUE_C1 = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64)
 
-    # subsets of D6 Laue groups (D6, D3, C6, C3) - C1 was already defined above
     LAUE_D6 = torch.tensor(
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -228,17 +188,7 @@ def laue_elements(laue_id: int) -> Tensor:
         ],
         dtype=torch.float64,
     )
-    LAUE_D3 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.5, 0.0, 0.0, R3],
-            [0.5, 0.0, 0.0, -R3],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, -0.5, R3, 0.0],
-            [0.0, 0.5, R3, 0.0],
-        ],
-        dtype=torch.float64,
-    )
+
     LAUE_C6 = torch.tensor(
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -250,22 +200,89 @@ def laue_elements(laue_id: int) -> Tensor:
         ],
         dtype=torch.float64,
     )
-    LAUE_C3 = torch.tensor(
-        [[1.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, R3], [0.5, 0.0, 0.0, -R3]],
+
+    LAUE_D3 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0, R3],
+            [0.5, 0.0, 0.0, -R3],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, -0.5, R3, 0.0],
+            [0.0, 0.5, R3, 0.0],
+        ],
         dtype=torch.float64,
     )
+
+    LAUE_C3 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0, R3],
+            [0.5, 0.0, 0.0, -R3],
+        ],
+        dtype=torch.float64,
+    )
+
+    LAUE_D4 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [R2, 0.0, 0.0, R2],
+            [R2, 0.0, 0.0, -R2],
+            [0.0, R2, R2, 0.0],
+            [0.0, -R2, R2, 0.0],
+        ],
+        dtype=torch.float64,
+    )
+
+    LAUE_C4 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [R2, 0.0, 0.0, R2],
+            [R2, 0.0, 0.0, -R2],
+        ],
+        dtype=torch.float64,
+    )
+
+    LAUE_D2 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float64,
+    )
+
+    LAUE_C2 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float64,
+    )
+
+    LAUE_C1 = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float64,
+    )
+
     LAUE_GROUPS = [
-        LAUE_C1,
-        LAUE_C2,
-        LAUE_C3,
-        LAUE_C4,
-        LAUE_C6,
-        LAUE_D2,
-        LAUE_D3,
-        LAUE_D4,
-        LAUE_D6,
-        LAUE_T,
-        LAUE_O,
+        LAUE_C1,  #  1 - Triclinic
+        LAUE_C2,  #  2 - Monoclinic
+        LAUE_D2,  #  3 - Orthorhombic
+        LAUE_C4,  #  4 - Tetragonal low
+        LAUE_D4,  #  5 - Tetragonal high
+        LAUE_C3,  #  6 - Trigonal low
+        LAUE_D3,  #  7 - Trigonal high
+        LAUE_C6,  #  8 - Hexagonal low
+        LAUE_D6,  #  9 - Hexagonal high
+        LAUE_T,  #  10 - Cubic low
+        LAUE_O,  #  11 - Cubic high
     ]
 
     return LAUE_GROUPS[laue_id - 1]
@@ -300,7 +317,7 @@ def ori_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_quaternions_real = quaternion_real_of_prod(
+    equivalent_quaternions_real = qu_prod_pos_real(
         quats.reshape(N, 1, 4), laue_group.reshape(card, 4)
     ).abs()
 
@@ -308,7 +325,7 @@ def ori_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     row_maximum_indices = torch.argmax(equivalent_quaternions_real, dim=-1)
 
     # gather the equivalent quaternions with the largest w value for each equivalent quaternion set
-    output = quaternion_multiply(quats.reshape(N, 4), laue_group[row_maximum_indices])
+    output = qu_prod(quats.reshape(N, 4), laue_group[row_maximum_indices])
 
     return output.reshape(data_shape)
 
@@ -332,9 +349,7 @@ def ori_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
     laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_quaternions = quaternion_multiply(
-        quats.reshape(N, 1, 4), laue_group.reshape(-1, 4)
-    )
+    equivalent_quaternions = qu_prod(quats.reshape(N, 1, 4), laue_group.reshape(-1, 4))
 
     return equivalent_quaternions.reshape(data_shape[:-1] + (len(laue_group), 4))
 
@@ -360,7 +375,7 @@ def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     laue_group = laue_elements(laue_id).to(quats.dtype).to(quats.device)
 
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
-    equiv_quats_real_part = quaternion_real_of_prod(
+    equiv_quats_real_part = qu_prod_pos_real(
         quats.reshape(N, 1, 4), laue_group.reshape(card, 4)
     ).abs()
 
@@ -390,13 +405,13 @@ def ori_angle_laue(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
     """
 
     # multiply without symmetry
-    misori_quats = quaternion_multiply(quats1, quaternion_invert(quats2))
+    misori_quats = qu_prod(quats1, qu_conj(quats2))
 
     # move the orientation quaternions to the fundamental zone
     ori_quats_fz = ori_to_fz_laue(misori_quats, laue_id)
 
     # find the disorientation angle
-    return misorientation_angle(norm_standard_quaternion(ori_quats_fz))
+    return qu_angle(qu_norm_std(ori_quats_fz))
 
 
 @torch.jit.script
@@ -426,7 +441,7 @@ def disorientation(quats1: Tensor, quats2: Tensor, laue_id_1: int, laue_id_2: in
         )
 
     # multiply by inverse of second (without symmetry)
-    misori_quats = quaternion_multiply(quats1, quaternion_invert(quats2))
+    misori_quats = qu_prod(quats1, qu_conj(quats2))
 
     # find the number of quaternions (generic input shapes are supported)
     N = torch.prod(torch.tensor(data_shape[:-1]))
@@ -442,11 +457,76 @@ def disorientation(quats1: Tensor, quats2: Tensor, laue_id_1: int, laue_id_2: in
 
     # pre / post mult by Laue operators of the second and first symmetry groups respectively
     # broadcasting is done so that the output is of shape (N, |laue_group_2|, |laue_group_1|, 4)
-    equivalent_quaternions = quaternion_multiply(
+    equivalent_quaternions = qu_prod(
         laue_group_2.reshape(1, -1, 1, 4),
-        quaternion_multiply(
-            misori_quats.view(N, 1, 1, 4), laue_group_1.reshape(1, 1, -1, 4)
-        ),
+        qu_prod(misori_quats.view(N, 1, 1, 4), laue_group_1.reshape(1, 1, -1, 4)),
+    )
+
+    # flatten along the laue group dimensions
+    equivalent_quaternions = equivalent_quaternions.reshape(N, -1, 4)
+
+    # find the quaternion with the largest real part value (smallest angle)
+    row_maximum_indices = torch.argmax(
+        equivalent_quaternions[..., 0].abs(),
+        dim=-1,
+    )
+
+    # TODO - Multiple equivalent quaternions can have the same angle. This function
+    # should choose the one with an axis that is in the fundamental sector of the sphere
+    # under the symmetry given by the intersection of the two Laue groups.
+
+    # gather the equivalent quaternions with the largest w value for each equivalent quaternion set
+    output = equivalent_quaternions[torch.arange(N), row_maximum_indices]
+
+    return output.reshape(data_shape)
+
+
+@torch.jit.script
+def disori_angle_laue(quats1: Tensor, quats2: Tensor, laue_id_1: int, laue_id_2: int):
+    """
+
+    Return the disorientation angle in radians between the given quaternions.
+
+    Args:
+        quats1: quaternions of shape (..., 4)
+        quats2: quaternions of shape (..., 4)
+        laue_id_1: laue group ID of quats1
+        laue_id_2: laue group ID of quats2
+
+    Returns:
+        disorientation quaternion of shape (..., 4)
+
+    """
+
+    # get the important shapes
+    data_shape = quats1.shape
+
+    # check that the shapes are the same
+    if data_shape != quats2.shape:
+        raise ValueError(
+            f"quats1 and quats2 must have the same data shape, but got {data_shape} and {quats2.shape}"
+        )
+
+    # multiply by inverse of second (without symmetry)
+    misori_quats = qu_prod(quats1, qu_conj(quats2))
+
+    # find the number of quaternions (generic input shapes are supported)
+    N = torch.prod(torch.tensor(data_shape[:-1]))
+
+    # retrieve the laue group elements for the first quaternions
+    laue_group_1 = laue_elements(laue_id_1).to(quats1.dtype).to(quats1.device)
+
+    # if the laue groups are the same, then the second laue group is the same as the first
+    if laue_id_1 == laue_id_2:
+        laue_group_2 = laue_group_1
+    else:
+        laue_group_2 = laue_elements(laue_id_2).to(quats2.dtype).to(quats2.device)
+
+    # pre / post mult by Laue operators of the second and first symmetry groups respectively
+    # broadcasting is done so that the output is of shape (N, |laue_group_2|, |laue_group_1|, 4)
+    equivalent_quaternions = qu_prod(
+        laue_group_2.reshape(1, -1, 1, 4),
+        qu_prod(misori_quats.view(N, 1, 1, 4), laue_group_1.reshape(1, 1, -1, 4)),
     )
 
     # flatten along the laue group dimensions
@@ -565,9 +645,7 @@ def s2_to_fz_laue(points: Tensor, laue_id: int) -> Tensor:
     laue_group = laue_elements(laue_id).to(points.dtype).to(points.device)
 
     # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_points = quaternion_apply(
-        laue_group.reshape(-1, 4), points.view(N, 1, 3)
-    )
+    equivalent_points = qu_apply(laue_group.reshape(-1, 4), points.view(N, 1, 3))
 
     # concatenate all of the points with their inverted coordinates
     equivalent_points = torch.cat([equivalent_points, -equivalent_points], dim=1)
@@ -599,9 +677,7 @@ def s2_equiv_laue(points: Tensor, laue_id: int) -> Tensor:
     laue_group = laue_elements(laue_id).to(points.dtype).to(points.device)
 
     # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_points = quaternion_apply(
-        laue_group.reshape(-1, 4), points.view(N, 1, 3)
-    )
+    equivalent_points = qu_apply(laue_group.reshape(-1, 4), points.view(N, 1, 3))
 
     # concatenate all of the points with their inverted coordinates
     equivalent_points = torch.cat([equivalent_points, -equivalent_points], dim=1)
@@ -786,7 +862,7 @@ def so3_color_fz_laue(
 
     """
 
-    reference_direction_moved = quaternion_apply(quaternions, reference_direction)
+    reference_direction_moved = qu_apply(quaternions, reference_direction)
 
     reference_direction_moved_fz = s2_to_fz_laue(reference_direction_moved, laue_id)
 

@@ -3,7 +3,7 @@ import torch
 from torch import Tensor
 
 from ebsdtorch.s2_and_so3.square_projection import rosca_lambert
-from ebsdtorch.s2_and_so3.orientations import quaternion_apply
+from ebsdtorch.s2_and_so3.orientations import qu_apply
 
 
 @torch.jit.script
@@ -137,9 +137,7 @@ def avg_pc_proj_to_det(
     )
 
     # rotate the outgoing vectors on the K-sphere according to the crystal orientations
-    rotated_vectors = quaternion_apply(
-        quaternions[:, None, :], direction_cosines[None, :, :]
-    )
+    rotated_vectors = qu_apply(quaternions[:, None, :], direction_cosines[None, :, :])
 
     # mask for positive z component
     mask = rotated_vectors[..., 2] > 0
@@ -199,7 +197,7 @@ def project_pattern_multiple_geometry(
     )
 
     # rotate the outgoing vectors on the K-sphere according to the crystal orientations
-    rotated_vectors = quaternion_apply(
+    rotated_vectors = qu_apply(
         quaternions[None, :, None, :], direction_cosines[:, None, :, :]
     )
 

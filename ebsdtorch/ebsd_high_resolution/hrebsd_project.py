@@ -15,7 +15,7 @@ from torch import Tensor
 
 from ebsdtorch.geometry.average_pc import average_pc
 from ebsdtorch.s2_and_so3.square_projection import rosca_lambert
-from ebsdtorch.s2_and_so3.orientations import quaternion_apply
+from ebsdtorch.s2_and_so3.orientations import qu_apply
 
 
 @torch.jit.script
@@ -134,7 +134,7 @@ def project_HREBSD_pattern(
     )
 
     # rotate the outgoing vectors on the K-sphere according to the crystal orientations
-    rotated_vectors = quaternion_apply(quaternions[:, None, :], direction_cosines)
+    rotated_vectors = qu_apply(quaternions[:, None, :], direction_cosines)
 
     # apply the inverse of the deformation gradients to the rotated vectors
     rotated_vectors = torch.matmul(

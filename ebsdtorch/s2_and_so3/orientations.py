@@ -1,21 +1,21 @@
 """
 
-Adopted from PyTorch3D (project from Meta Research - formerly Facebook Research) and from EMsoft
+Adopted from PyTorch3D and from EMsoft
 
 https://github.com/facebookresearch/pytorch3d
 
 https://github.com/marcdegraef/3Drotations
 
-List of acronyms used in the code:
-
+Abbreviations used in the code:
 cu: cubochoric
 ho: homochoric
 ax: axis-angle
 qu: quaternion
 om: orientation matrix
 eu: Euler angles
+bu: Bunge ZXZ Euler angles
 ro: Rodrigues-Frank vector
-zh: 6D continuous representation or orientation
+zh: 6D continuous representation of orientation
 
 """
 
@@ -24,30 +24,28 @@ from torch import Tensor
 
 
 @torch.jit.script
-def standardize_quaternion(quaternions: Tensor) -> Tensor:
+def qu_std(qu: Tensor) -> Tensor:
     """
-    Convert a unit quaternion to a standard form: one in which the real
-    part is non-negative.
+    Standardize unit quaternion to have non-negative real part.
 
     Args:
-        quaternions: Quaternions with real part first,
-            as tensor of shape (..., 4).
+        qu: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
         Standardized quaternions as tensor of shape (..., 4).
     """
-    return torch.where(quaternions[..., 0:1] < 0, -quaternions, quaternions)
+    return torch.where(qu[..., 0:1] < 0, -qu, qu)
 
 
 @torch.jit.script
-def quaternion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
+def qu_prod_raw(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two quaternions.
     Usual torch rules for broadcasting apply.
 
     Args:
-        a: Quaternions as tensor of shape (..., 4), real part first.
-        b: Quaternions as tensor of shape (..., 4), real part first.
+        a: shape (..., 4) quaternions in form (w, x, y, z)
+        b: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
         The product of a and b, a tensor of quaternions shape (..., 4).
@@ -62,110 +60,139 @@ def quaternion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def quaternion_multiply(a: Tensor, b: Tensor) -> Tensor:
+def qu_prod(a: Tensor, b: Tensor) -> Tensor:
     """
-    Multiply two quaternions representing rotations, returning the quaternion
-    representing their composition, i.e. the versor with nonnegative real part.
-    Usual torch rules for broadcasting apply.
+    Quaternion multiplication, then make real part non-negative.
 
     Args:
-        a: Quaternions as tensor of shape (..., 4), real part first.
-        b: Quaternions as tensor of shape (..., 4), real part first.
+        a: shape (..., 4) quaternions in form (w, x, y, z)
+        b: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
-        The product of a and b, a tensor of quaternions of shape (..., 4).
+        a*b Tensor shape (..., 4) of the quaternion product.
+
     """
-    ab = quaternion_raw_multiply(a, b)
-    return standardize_quaternion(ab)
+    ab = qu_prod_raw(a, b)
+    return qu_std(ab)
 
 
 @torch.jit.script
-def quaternion_real_of_prod(a: Tensor, b: Tensor) -> Tensor:
+def qu_prod_pos_real(a: Tensor, b: Tensor) -> Tensor:
     """
-    Multiply two quaternions and return the positive real part of the product.
-
+    Return only the magnitude of the real part of the quaternion product.
 
     Args:
-        a: Quaternions as tensor of shape (..., 4), real part first.
-        b: Quaternions as tensor of shape (..., 4), real part first.
+        a: shape (..., 4) quaternions in form (w, x, y, z)
+        b: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
-        The positive real part of the product of a and b, a tensor of shape (..., 1).
+        a*b Tensor shape (..., ) of quaternion product real part magnitudes.
     """
-    aw, ax, ay, az = torch.unbind(a, -1)
-    bw, bx, by, bz = torch.unbind(b, -1)
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
     ow = aw * bw - ax * bx - ay * by - az * bz
     return ow.abs()
 
 
 @torch.jit.script
-def quaternion_invert(quaternion: Tensor) -> Tensor:
+def qu_triple_prod_pos_real(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
+    """
+    Return only the magnitude of the real part of the quaternion triple product.
+
+    Args:
+        a: shape (..., 4) quaternions in form (w, x, y, z)
+        b: shape (..., 4) quaternions in form (w, x, y, z)
+        c: shape (..., 4) quaternions in form (w, x, y, z)
+
+    Returns:
+        a*b*c Tensor shape (..., ) of quaternion triple product real part magnitudes.
+    """
+    return qu_prod_pos_real(a, qu_prod(b, c))
+
+
+@torch.jit.script
+def qu_prod_axis(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Return the axis of the quaternion product.
+
+    Args:
+        a: shape (..., 4) quaternions in form (w, x, y, z)
+        b: shape (..., 4) quaternions in form (w, x, y, z)
+
+    Returns:
+        a*b Tensor shape (..., 3) of quaternion product axes.
+    """
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    ox = aw * bx + ax * bw + ay * bz - az * by
+    oy = aw * by - ax * bz + ay * bw + az * bx
+    oz = aw * bz + ax * by - ay * bx + az * bw
+    return torch.stack((ox, oy, oz), -1)
+
+
+@torch.jit.script
+def qu_conj(qu: Tensor) -> Tensor:
     """
     Given a quaternion representing rotation, get the quaternion representing
     its inverse.
 
     Args:
-        quaternion: Quaternions as tensor of shape (..., 4), with real part
-            first, which must be versors (unit quaternions).
+        qu: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
         The inverse, a tensor of quaternions of shape (..., 4).
     """
-
-    scaling = torch.tensor([1, -1, -1, -1], device=quaternion.device)
-    return quaternion * scaling
+    scaling = torch.tensor([1, -1, -1, -1], device=qu.device, dtype=qu.dtype)
+    return qu * scaling
 
 
 @torch.jit.script
-def quaternion_apply(quaternion: Tensor, point: Tensor) -> Tensor:
+def qu_apply(qu: Tensor, point: Tensor) -> Tensor:
     """
     Apply the rotation given by a quaternion to a 3D point. Usual torch rules
     for broadcasting apply.
 
     Args:
-        quaternion: shape (..., 4) of quaternions in the form (w, x, y, z)
+        qu: shape (..., 4) of quaternions in the form (w, x, y, z)
         point: shape (..., 3) of 3D points.
 
     Returns:
         Tensor of rotated points of shape (..., 3).
     """
-    if point.size(-1) != 3:
-        raise ValueError(f"Points are not in 3D, {point.shape}.")
     real_parts = point.new_zeros(point.shape[:-1] + (1,))
     point_as_quaternion = torch.cat((real_parts, point), -1)
-    out = quaternion_raw_multiply(
-        quaternion_raw_multiply(quaternion, point_as_quaternion),
-        quaternion_invert(quaternion),
+    return qu_prod_axis(
+        qu_prod_raw(qu, point_as_quaternion),
+        qu_conj(qu),
     )
-    return out[..., 1:]
 
 
 @torch.jit.script
-def normalize_quaternion(quaternion: Tensor) -> Tensor:
+def qu_norm(qu: Tensor) -> Tensor:
     """
-    Normalize a quaternion to a unit quaternion.
+    Normalize quaternions to unit quaternions.
 
     Args:
-        quaternion: shape (..., 4) quaternions in form (w, x, y, z)
+        qu: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
         Tensor of normalized quaternions.
     """
-    return quaternion / torch.norm(quaternion, dim=-1, keepdim=True)
+    return qu / torch.norm(qu, dim=-1, keepdim=True)
 
 
 @torch.jit.script
-def norm_standard_quaternion(quaternion: Tensor) -> Tensor:
+def qu_norm_std(qu: Tensor) -> Tensor:
     """
     Normalize a quaternion to a unit quaternion and standardize it.
 
     Args:
-        quaternion: shape (..., 4) quaternions in form (w, x, y, z)
+        qu: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
         Tensor of normalized and standardized quaternions.
     """
-    return standardize_quaternion(normalize_quaternion(quaternion))
+    return qu_std(qu_norm(qu))
 
 
 @torch.jit.script
@@ -209,18 +236,17 @@ def quaternion_rotate_sets_sphere(points_start: Tensor, points_finish) -> Tensor
 
 
 @torch.jit.script
-def misorientation_angle(quaternion: Tensor) -> Tensor:
+def qu_angle(qu: Tensor) -> Tensor:
     """
-    Compute the misorientation angle for a quaternion.
+    Compute angles of rotation for quaternions.
 
     Args:
-        quaternion: Quaternions as tensor of shape (..., 4), with real part
-            first, which must be versors (unit quaternions).
+        qu: shape (..., 4) quaternions in form (w, x, y, z)
 
     Returns:
-        The misorientation angle, a tensor of shape (...).
+        tensor of shape (..., ) of rotation angles.
     """
-    return 2 * torch.acos(quaternion[..., 0])
+    return 2 * torch.acos(qu[..., 0])
 
 
 # -------------------------------------------------------------------
@@ -649,73 +675,6 @@ def ho2cu(ho: Tensor) -> Tensor:
     return cu
 
 
-# @torch.jit.script
-# def ho2ax(ho: Tensor) -> Tensor:
-#     """
-#     Converts a set of homochoric vectors to axis-angle representation.
-
-#     Args:
-#         ho (Tensor): shape (..., 3) homochoric coordinates (x, y, z)
-
-#     Returns:
-#         torch.Tensor: shape (..., 4) axis-angles (x, y, z, angle)
-
-#     """
-#     fit_parameters = torch.tensor(
-#         [
-# 0.9999999999999968,
-# -0.49999999999986866,
-# -0.025000000000632055,
-# -0.003928571496460683,
-# -0.0008164666077062752,
-# -0.00019411896443261646,
-# -0.00004985822229871769,
-# -0.000014164962366386031,
-# -1.9000248160936107e-6,
-# -5.72184549898506e-6,
-# 7.772149920658778e-6,
-# -0.00001053483452909705,
-# 9.528014229335313e-6,
-# -5.660288876265125e-6,
-# 1.2844901692764126e-6,
-# 1.1255185726258763e-6,
-# -1.3834391419956455e-6,
-# 7.513691751164847e-7,
-# -2.401996891720091e-7,
-# 4.386887017466388e-8,
-# -3.5917775353564864e-9,
-#         ],
-#         dtype=torch.float64,
-#         device=ho.device,
-#     ).to(ho.dtype)
-
-#     ho_norm_sq = torch.sum(ho**2, dim=-1, keepdim=True)
-
-#     s = torch.sum(
-#         fit_parameters
-#         * ho_norm_sq ** torch.arange(len(fit_parameters), dtype=ho.dtype),
-#         dim=-1,
-#     )
-
-#     ax = torch.empty(ho.shape[:-1] + (4,), dtype=ho.dtype, device=ho.device)
-
-#     mask_identity = torch.abs(ho_norm_sq.squeeze(-1)) < 1e-8
-#     ax[mask_identity, 0:1] = 0.0
-#     ax[mask_identity, 1:2] = 0.0
-#     ax[mask_identity, 2:3] = 1.0
-
-#     mask_large = ~mask_identity
-#     ax[mask_large, :3] = ho[mask_large, :] * torch.rsqrt(ho_norm_sq[mask_large])
-
-#     ax[..., 3] = torch.where(
-#         mask_large,
-#         2.0 * torch.arccos(torch.clamp(s, -1.0, 1.0)),
-#         0,
-#     )
-
-#     return ax
-
-
 @torch.jit.script
 def ho2ax(ho: Tensor) -> Tensor:
     """
@@ -788,7 +747,8 @@ def ho2ax(ho: Tensor) -> Tensor:
 
     s = torch.sum(
         fit_parameters
-        * ho_norm_sq ** torch.arange(len(fit_parameters), dtype=ho.dtype),
+        * ho_norm_sq
+        ** torch.arange(len(fit_parameters), dtype=ho.dtype, device=ho.device),
         dim=-1,
     )
 
@@ -1023,7 +983,7 @@ def bu2qu(bu: Tensor) -> Tensor:
     qu[..., 3] = -c * torch.sin(sigma)
 
     # correct for negative real part of quaternion
-    return standardize_quaternion(qu)
+    return qu_std(qu)
 
 
 @torch.jit.script
