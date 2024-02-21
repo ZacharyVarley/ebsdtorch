@@ -14,6 +14,7 @@ qu: quaternion
 om: orientation matrix
 eu: Euler angles
 bu: Bunge ZXZ Euler angles
+cl: Clifford Torus
 ro: Rodrigues-Frank vector
 zh: 6D continuous representation of orientation
 
@@ -50,8 +51,8 @@ def qu_prod_raw(a: Tensor, b: Tensor) -> Tensor:
     Returns:
         The product of a and b, a tensor of quaternions shape (..., 4).
     """
-    aw, ax, ay, az = torch.unbind(a, -1)
-    bw, bx, by, bz = torch.unbind(b, -1)
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
     ow = aw * bw - ax * bx - ay * by - az * bz
     ox = aw * bx + ax * bw + ay * bz - az * by
     oy = aw * by - ax * bz + ay * bw + az * bx
@@ -133,8 +134,7 @@ def qu_prod_axis(a: Tensor, b: Tensor) -> Tensor:
 @torch.jit.script
 def qu_conj(qu: Tensor) -> Tensor:
     """
-    Given a quaternion representing rotation, get the quaternion representing
-    its inverse.
+    Get the unit quaternions for the inverse action.
 
     Args:
         qu: shape (..., 4) quaternions in form (w, x, y, z)
@@ -149,8 +149,7 @@ def qu_conj(qu: Tensor) -> Tensor:
 @torch.jit.script
 def qu_apply(qu: Tensor, point: Tensor) -> Tensor:
     """
-    Apply the rotation given by a quaternion to a 3D point. Usual torch rules
-    for broadcasting apply.
+    Rotate 3D points by unit quaternions.
 
     Args:
         qu: shape (..., 4) of quaternions in the form (w, x, y, z)
@@ -170,7 +169,7 @@ def qu_apply(qu: Tensor, point: Tensor) -> Tensor:
 @torch.jit.script
 def qu_norm(qu: Tensor) -> Tensor:
     """
-    Normalize quaternions to unit quaternions.
+    Normalize quaternions to unit norm.
 
     Args:
         qu: shape (..., 4) quaternions in form (w, x, y, z)
@@ -184,7 +183,7 @@ def qu_norm(qu: Tensor) -> Tensor:
 @torch.jit.script
 def qu_norm_std(qu: Tensor) -> Tensor:
     """
-    Normalize a quaternion to a unit quaternion and standardize it.
+    Normalize a quaternion to unit norm and make real part non-negative.
 
     Args:
         qu: shape (..., 4) quaternions in form (w, x, y, z)
@@ -888,12 +887,10 @@ def qu2ro(qu: Tensor) -> Tensor:
     Converts quaternion representation to Rodrigues-Frank vector representation.
 
     Args:
-        qu (Tensor): Tensor of shape (..., 4) where N is the number of quaternions.
-            Each row represents a quaternion in the format (w, x, y, z).
+        qu: shape (..., 4) quaternions in the format (w, x, y, z).
 
     Returns:
-        torch.Tensor: Tensor of shape (..., 4) where N is the number of Rodrigues-Frank vectors.
-            Each row represents a Rodrigues-Frank vector representation.
+        Tensor: shape (..., 4) Rodrigues-Frank (x, y, z, tan(angle/2))
     """
     ro = torch.empty_like(qu)
 
@@ -984,6 +981,32 @@ def bu2qu(bu: Tensor) -> Tensor:
 
     # correct for negative real part of quaternion
     return qu_std(qu)
+
+
+@torch.jit.script
+def qu2cl(qu: Tensor) -> Tensor:
+    """
+    Convert rotations given as unit quaternions to Clifford Torus coordinates.
+    The coordinates are in the format (X, Z_y, Y, X_z, Z, Y_x)
+
+    Args:
+        qu (Tensor): shape (..., 4) quaternions in the format (w, x, y, z).
+
+    Returns:
+        torch.Tensor: shape (..., 6) Clifford Torus coordinates.
+
+    """
+
+    cl = torch.empty(qu.shape[:-1] + (6,), dtype=qu.dtype, device=qu.device)
+
+    cl[..., 0] = torch.atan(qu[..., 1] / qu[..., 0])
+    cl[..., 1] = torch.atan(qu[..., 3] / qu[..., 2])
+    cl[..., 2] = torch.atan(qu[..., 2] / qu[..., 0])
+    cl[..., 3] = torch.atan(qu[..., 1] / qu[..., 3])
+    cl[..., 4] = torch.atan(qu[..., 3] / qu[..., 0])
+    cl[..., 5] = torch.atan(qu[..., 2] / qu[..., 1])
+
+    return cl
 
 
 @torch.jit.script

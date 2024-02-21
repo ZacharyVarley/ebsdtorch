@@ -56,8 +56,8 @@ def get_laue_mult(laue_group: int) -> int:
     Laue =10] m3‾, 23               Cubic      low
     Laue = 9] 6/mmm, 6‾m2, 6mm, 622 Hexagonal  high
     Laue = 8] 6/m, 6‾, 6            Hexagonal  low
-    Laue = 7] 3‾m                   Trigonal   high
-    Laue = 6] 3m, 32, 3‾, 31        Trigonal   low
+    Laue = 7] 3‾m, 3m, 32           Trigonal   high
+    Laue = 6] 3‾, 3                 Trigonal   low
     Laue = 5] 4/mmm, 4‾2m, 4mm, 422 Tetragonal high
     Laue = 4] 4/m, 4‾, 4            Tetragonal low
     Laue = 3] mmm, mm2, 222         Orthorhombic
@@ -99,8 +99,8 @@ def laue_elements(laue_id: int) -> Tensor:
     Laue =10] m3‾, 23               Cubic      low
     Laue = 9] 6/mmm, 6‾m2, 6mm, 622 Hexagonal  high
     Laue = 8] 6/m, 6‾, 6            Hexagonal  low
-    Laue = 7] 3‾m                   Trigonal   high
-    Laue = 6] 3m, 32, 3‾, 31        Trigonal   low
+    Laue = 7] 3‾m, 3m, 32           Trigonal   high
+    Laue = 6] 3‾, 3                 Trigonal   low
     Laue = 5] 4/mmm, 4‾2m, 4mm, 422 Tetragonal high
     Laue = 4] 4/m, 4‾, 4            Tetragonal low
     Laue = 3] mmm, mm2, 222         Orthorhombic
@@ -319,7 +319,7 @@ def ori_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
     equivalent_quaternions_real = qu_prod_pos_real(
         quats.reshape(N, 1, 4), laue_group.reshape(card, 4)
-    ).abs()
+    )
 
     # find the quaternion with the largest w value
     row_maximum_indices = torch.argmax(equivalent_quaternions_real, dim=-1)
