@@ -14,8 +14,8 @@ import torch
 from torch import Tensor
 
 from ebsdtorch.geometry.average_pc import average_pc
-from ebsdtorch.s2_and_so3.square_projection import rosca_lambert
-from ebsdtorch.s2_and_so3.orientations import qu_apply
+from ebsdtorch.s2_and_so3.sphere import rosca_lambert
+from ebsdtorch.s2_and_so3.quaternions import qu_apply
 
 
 @torch.jit.script

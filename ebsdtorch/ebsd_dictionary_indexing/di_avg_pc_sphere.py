@@ -17,7 +17,7 @@ from torch import Tensor
 from ebsdtorch.geometry.average_pc import avg_pc_proj_to_det, average_pc
 from ebsdtorch.ebsd_dictionary_indexing.utils_nearest_neighbors import knn
 from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
-from ebsdtorch.s2_and_so3.laue import sample_ori_fz_laue
+from ebsdtorch.s2_and_so3.laue_fz_ori import sample_ori_fz_laue
 
 
 def _project_dictionary(

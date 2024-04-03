@@ -4,12 +4,16 @@ Real Valued Spherical Harmonic Transformations from TS2Kit:
 
 https://github.com/twmitchel/TS2Kit/blob/main/TS2Kit.pdf
 
+I had to unexpectedly swap subscripts k and m of the Wigner little d entries
+when comparing the convention used by Fukushima / William Lenthe and that used
+by Tommy Mitchel in TS2Kit. Spherical harmonic conventions are an absolute mess.
+
 Side note thoughts on EMsoft's EMSphInx:
 
 https://github.com/EMsoft-org/EMSphInx/blob/master/include/sht/square_sht.hpp
 
-EMSphInx computes quadrature weights for latitude rings that make pixels
-relatively equal area. I am not doing that because the quadrature weight
+EMSphInx manually computes quadrature weights for latitude rings that make
+pixels relatively equal area. I am not doing that because the quadrature weight
 calculation is O(B^4) as far as I understand. Might add this later.
 
 Side note thoughts on Euler angles and SO(3) FFT:
@@ -168,29 +172,35 @@ def idstMatrix(
 # Weighted DCT and DST implemented as linear layers
 # Adapted from https://github.com/zh217/torch-dct/blob/master/torch_dct/_dct.py
 class weightedDCST(nn.Linear):
-    """DCT or DST as a linear layer"""
+    """Discrete Cosine Transform and Discrete Sine Transform implemented as linear layers
 
-    def __init__(self, B, xform):
+    Args:
+        L: (int) Transform bandlimit
+        xform: (str) "c" for DCT, "ic" for inverse DCT, "s" for DST, "is" for inverse DST
+
+    """
+
+    def __init__(self, L, xform):
         self.xform = xform
-        self.B = B
-        super(weightedDCST, self).__init__(2 * B, 2 * B, bias=False)
+        self.L = L
+        super(weightedDCST, self).__init__(2 * L, 2 * L, bias=False)
 
     def reset_parameters(self):
-        B = self.B
+        L = self.L
 
         if self.xform == "c":
-            W = torch.diag(dltWeightsDH(B))
-            XF = torch.matmul(W, idctMatrix(2 * B))
+            W = torch.diag(dltWeightsDH(L))
+            XF = torch.matmul(W, idctMatrix(2 * L))
 
         elif self.xform == "ic":
-            XF = idctMatrix(2 * B).t()
+            XF = idctMatrix(2 * L).t()
 
         elif self.xform == "s":
-            W = torch.diag(dltWeightsDH(B))
-            XF = torch.matmul(W, idstMatrix(2 * B))
+            W = torch.diag(dltWeightsDH(L))
+            XF = torch.matmul(W, idstMatrix(2 * L))
 
         elif self.xform == "is":
-            XF = idstMatrix(2 * B).t()
+            XF = idstMatrix(2 * L).t()
 
         self.weight.data = XF.t().data
         self.weight.requires_grad = False  # don't learn this!
@@ -199,32 +209,31 @@ class weightedDCST(nn.Linear):
 # Forward Discrete Legendre Transform
 class FDLT(nn.Module):
 
-    def __init__(self, B):
+    def __init__(
+        self,
+        L: int,
+    ):
         super(FDLT, self).__init__()
-        self.B = B
-        self.dct = weightedDCST(B, "c")
-        self.dst = weightedDCST(B, "s")
+        self.L = L
+        self.dct = weightedDCST(L, "c")
+        self.dst = weightedDCST(L, "s")
 
-        if ((B - 1) % 2) == 1:
-            cInd = torch.arange(1, 2 * B - 1, 2)
-            sInd = torch.arange(0, 2 * B - 1, 2)
+        if ((L - 1) % 2) == 1:
+            cInd = torch.arange(1, 2 * L - 1, 2)
+            sInd = torch.arange(0, 2 * L - 1, 2)
 
         else:
-            sInd = torch.arange(1, 2 * B - 1, 2)
-            cInd = torch.arange(0, 2 * B - 1, 2)
+            sInd = torch.arange(1, 2 * L - 1, 2)
+            cInd = torch.arange(0, 2 * L - 1, 2)
 
         self.register_buffer("cInd", cInd)
         self.register_buffer("sInd", sInd)
-        self.register_buffer("Cm", normCm(B))
-
-        print("Calling wigner_d_SHT_weights_half_pi")
-        self.register_buffer("D", wigner_d_SHT_weights_half_pi(B))
-        torch.cuda.synchronize()
-        print("Computed d matrix")
+        self.register_buffer("Cm", normCm(L))
+        self.register_buffer("D", wigner_d_SHT_weights_half_pi(L))
 
     def forward(self, psiHat):
         # psiHat = b x M x phi
-        B, b = self.B, psiHat.size()[0]
+        L, b = self.L, psiHat.size()[0]
 
         # Multiply by normalization coefficients
         psiHat = torch.mul(self.Cm[None, :, None], psiHat)
@@ -234,48 +243,63 @@ class FDLT(nn.Module):
         psiHat[:, self.sInd, :] = self.dst(psiHat[:, self.sInd, :])
 
         # Reshape for sparse matrix multiplication
-        psiHat = torch.transpose(torch.reshape(psiHat, (b, 2 * B * (2 * B - 1))), 0, 1)
+        psiHat = torch.transpose(torch.reshape(psiHat, (b, 2 * L * (2 * L - 1))), 0, 1)
         # Psi =  b x M x L
         return torch.permute(
-            torch.reshape(torch.mm(self.D, psiHat), (2 * B - 1, B, b)), (2, 0, 1)
+            torch.reshape(torch.mm(self.D, psiHat), (2 * L - 1, L, b)), (2, 0, 1)
         )
 
 
 # Inverse Discrete Legendre Transform
 class IDLT(nn.Module):
-    def __init__(self, B):
+    """
+
+    Inverse Discrete Legendre Transform
+
+    Args:
+        L: (int) Transform bandlimit
+
+    """
+
+    def __init__(
+        self,
+        L: int,
+    ):
         super(IDLT, self).__init__()
-        self.B = B
-        self.dct = weightedDCST(B, "ic")
-        self.dst = weightedDCST(B, "is")
-        if ((B - 1) % 2) == 1:
-            cInd = torch.arange(1, 2 * B - 1, 2)
-            sInd = torch.arange(0, 2 * B - 1, 2)
+        self.L = L
+        self.dct = weightedDCST(L, "ic")
+        self.dst = weightedDCST(L, "is")
+        if ((L - 1) % 2) == 1:
+            cInd = torch.arange(1, 2 * L - 1, 2)
+            sInd = torch.arange(0, 2 * L - 1, 2)
 
         else:
-            sInd = torch.arange(1, 2 * B - 1, 2)
-            cInd = torch.arange(0, 2 * B - 1, 2)
+            sInd = torch.arange(1, 2 * L - 1, 2)
+            cInd = torch.arange(0, 2 * L - 1, 2)
 
         self.register_buffer("cInd", cInd)
         self.register_buffer("sInd", sInd)
-        self.register_buffer("iCm", torch.reciprocal(normCm(B)))
+        self.register_buffer("iCm", torch.reciprocal(normCm(L)))
         self.register_buffer(
-            "DT", torch.transpose(wigner_d_SHT_weights_half_pi(B), 0, 1)
+            "DT", torch.transpose(wigner_d_SHT_weights_half_pi(L), 0, 1)
         )
 
-    def forward(self, Psi):
+    def forward(
+        self,
+        Psi: Tensor,
+    ):
         # Psi: b x M x L
-        B, b = self.B, Psi.size()[0]
+        L, b = self.L, Psi.size()[0]
         psiHat = torch.reshape(
             torch.transpose(
                 torch.mm(
                     self.DT,
-                    torch.transpose(torch.reshape(Psi, (b, (2 * B - 1) * B)), 0, 1),
+                    torch.transpose(torch.reshape(Psi, (b, (2 * L - 1) * L)), 0, 1),
                 ),
                 0,
                 1,
             ),
-            (b, 2 * B - 1, 2 * B),
+            (b, 2 * L - 1, 2 * L),
         )
 
         # Apply DCT + DST to even + odd indexed m
@@ -290,33 +314,33 @@ class FTSHT(nn.Module):
     """
     The Forward "Tensorized" Discrete Spherical Harmonic Transform
 
-    Input:
-
-    B: (int) Transform bandlimit
-
+    Args:
+        L: (int) Transform bandlimit
     """
 
-    def __init__(self, B):
+    def __init__(
+        self,
+        L: int,
+    ):
         super(FTSHT, self).__init__()
-        self.B = B
-        self.FDL = FDLT(B)
+        self.L = L
+        self.FDL = FDLT(L)
 
     def forward(self, psi):
         """
         Input:
 
-        psi: ( b x 2B x 2B torch.double or torch.cdouble tensor )
-             Real or complex spherical signal sampled on the 2B X 2B DH grid with b batch dimensions
+        psi: (b x 2L x 2L torch.double or torch.cdouble tensor )
+             Real or complex spherical signal sampled on the 2L X 2L DH grid with b batch dimensions
 
         Output:
 
-        Psi: (b x (2B - 1) x B torch.cdouble tensor)
-             Complex tensor of SH coefficients over b batch dimensions
+        Psi: (b x (2L - 1) x L torch.cdouble tensor) Complex tensor of SH coefficients over b batch dimensions
 
         """
 
         # psi: b x theta x phi (real or complex)
-        B, b = self.B, psi.size()[0]
+        L, b = self.L, psi.size()[0]
 
         ## FFT in polar component
         # psiHat: b x  M x Phi
@@ -328,7 +352,7 @@ class FTSHT(nn.Module):
         ## Convert to real representation
         psiHat = torch.reshape(
             torch.permute(torch.view_as_real(psiHat), (0, 3, 1, 2)),
-            (2 * b, 2 * B - 1, 2 * B),
+            (2 * b, 2 * L - 1, 2 * L),
         )
 
         # Forward DLT
@@ -338,7 +362,7 @@ class FTSHT(nn.Module):
         # Psi: b x M x L (complex)
 
         return torch.view_as_complex(
-            torch.permute(torch.reshape(Psi, (b, 2, 2 * B - 1, B)), (0, 2, 3, 1))
+            torch.permute(torch.reshape(Psi, (b, 2, 2 * L - 1, L)), (0, 2, 3, 1))
         )
 
 
@@ -352,31 +376,37 @@ class ITSHT(nn.Module):
 
     """
 
-    def __init__(self, B):
+    def __init__(
+        self,
+        L: int,
+    ):
         super(ITSHT, self).__init__()
-        self.B = B
-        self.IDL = IDLT(B)
+        self.L = L
+        self.IDL = IDLT(L)
 
-    def forward(self, Psi):
+    def forward(
+        self,
+        Psi: Tensor,
+    ):
         """
         Input:
 
-        Psi: (b x (2B - 1) x B torch.cdouble tensor)
+        Psi: (b x (2L - 1) x B torch.cdouble tensor)
              Complex tensor of SH coefficients over b batch dimensions
 
         Output:
 
-        psi: ( b x 2B x 2B torch.cdouble tensor )
-             Complex spherical signal sampled on the 2B X 2B DH grid with b batch dimensions
+        psi: ( b x 2L x 2L torch.cdouble tensor )
+             Complex spherical signal sampled on the 2L X 2L DH grid with b batch dimensions
 
         """
 
         # Psi: b x  M x L (complex)
-        B, b = self.B, Psi.size()[0]
+        L, b = self.L, Psi.size()[0]
 
         # Convert to real
         Psi = torch.reshape(
-            torch.permute(torch.view_as_real(Psi), (0, 3, 1, 2)), (2 * b, 2 * B - 1, B)
+            torch.permute(torch.view_as_real(Psi), (0, 3, 1, 2)), (2 * b, 2 * L - 1, L)
         )
 
         # Inverse DLT
@@ -384,16 +414,15 @@ class ITSHT(nn.Module):
 
         # Convert back to complex
         psiHat = torch.view_as_complex(
-            torch.permute(torch.reshape(psiHat, (b, 2, 2 * B - 1, 2 * B)), (0, 2, 3, 1))
+            torch.permute(torch.reshape(psiHat, (b, 2, 2 * L - 1, 2 * L)), (0, 2, 3, 1))
         )
 
         ## Set up for iFFT
         psiHat = torch.cat(
-            (torch.empty(b, 1, 2 * B, device=psiHat.device).float().fill_(0), psiHat),
+            (torch.empty(b, 1, 2 * L, device=psiHat.device).float().fill_(0), psiHat),
             dim=1,
         )
 
         # Inverse FFT and return
         # psi: b x theta x phi (complex)
-
         return torch.fft.ifft(torch.fft.ifftshift(psiHat, dim=1), dim=1, norm="forward")

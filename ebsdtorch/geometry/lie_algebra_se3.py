@@ -10,9 +10,9 @@ The Lie algebra of the special Euclidean group in 3D, $\mathbf {se}(3)$, is
 barely different than the individual translation and SO(3) rotation Lie
 algebras. They mix according to the Jacobian of SO3... see section 10.6.9 of: 
 
-Chirikjian, G. S., & Chirikjian, G. S. (2012). Algebraic and Geometric Coding
-Theory. Stochastic Models, Information Theory, and Lie Groups, Volume 2:
-Analytic Methods and Modern Applications, 313-336.
+Chirikjian, G. S. (2012). Algebraic and Geometric Coding Theory. Stochastic
+Models, Information Theory, and Lie Groups, Volume 2: Analytic Methods and
+Modern Applications, 313-336.
 
 I am mostly cleaning up the PyTorch3D (from Meta / Facebook) implementation:
 
@@ -21,28 +21,30 @@ https://github.com/facebookresearch/pytorch3d/blob/main/pytorch3d/transforms/se3
 That said, there are some newer approaches: dual quaternions. Dual quaternions
 can represent SE(3) and there has been recent efforts to craft a numerically
 stable exponential and logarithm map for them:
+
 https://dyalab.mines.edu/papers/dantam2018practical.pdf
 
-##########################################################################################
-#####################################  WARNING  ##########################################
-##########################################################################################
+#########################################################################
+###############################  WARNING  ###############################
+#########################################################################
 
 Small angles (approx. < 0.001 radians) ... if you need them either use float64
-quatnernions instead of float32, or float32 / float64 rotation matrices.
+quatnernions instead of float32, or float32 / float64 rotation matrices. If you
+know that you will be far away from the identity rotation, or you don't care
+about small angles below 0.5 degree, you can use quaternions and float32.
 
 If your angles are smaller than about 0.001 rad, you lose most of the effective
 significant digits when storing the real part of the quaternion in float32. This
-is why the Lie algebra is often implement with rotation matrices, even though
-they are not as efficient to work with when using them to rotate points in 3D.
-If you know that you will be far away from the identity rotation, or you don't
-care about small angles below 0.5 degree, you can use quaternions and float32.
+is one reason why the Lie algebra is often implemented with rotation matrices,
+even though they are not as efficient to work with when using them to rotate
+points in 3D. Another reason could be that the subsequent transformations of
+points (in the case of PyTorch3D) are not necessarily rotations overall.
 
 """
 
 from typing import Tuple
 import torch
 from torch import Tensor
-from torch.nn import Module
 from ebsdtorch.s2_and_so3.orientations import ax2qu, qu2ax
 
 
@@ -383,7 +385,7 @@ def se3_log_map_om(se3: Tensor) -> Tensor:
     acos_arg = torch.clamp(acos_arg, -1.0, 1.0)
     theta = torch.acos(acos_arg)
 
-    # where the angle is small, treat theta/sin(theta) as 1
+    # where the angle is small, treat (theta/sin(theta)) as 1
     stable = theta > 0.001
     omegas[..., 0] = se3[..., 2, 1] - se3[..., 1, 2]
     omegas[..., 1] = se3[..., 0, 2] - se3[..., 2, 0]

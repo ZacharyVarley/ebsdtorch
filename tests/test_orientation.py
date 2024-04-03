@@ -2,13 +2,6 @@ import pytest
 import torch
 import numpy as np
 from ebsdtorch.s2_and_so3.orientations import (
-    # quaternion operations
-    qu_prod_raw,
-    qu_prod,
-    qu_conj,
-    qu_prod_pos_real,
-    qu_norm,
-    qu_std,
     # quaternion to other
     qu2ax,
     qu2cu,

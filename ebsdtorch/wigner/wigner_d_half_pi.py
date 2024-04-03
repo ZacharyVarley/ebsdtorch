@@ -511,24 +511,108 @@ def access_d_beta_half_pi_ts2kit(
     )
 
 
+@torch.jit.script
+def access_d_beta_half_pi(
+    j: Tensor, k: Tensor, m: Tensor, quarter_table: Tensor
+) -> Tensor:
+    """
+
+    Index into the quarter table of Wigner d-coefficients. The quarter table
+    has the following shape: (degree_max + 1, order_max + 1, order_max + 1),
+    and it is only filled in where j >= k, and j >= m. However, m and k are
+    allowed to be negative. We use symmetry relations to calculate any values
+    outside of the quarter table.
+
+    There is an anomalous factor at the end because the Wigner d-coefficients
+    are defined in TS2Kit with the first ordinal corresponding to the exponentiation
+    of the first angle in the (Z, Y, Z) pair. Both Toshio and EMSphInx have them
+    flipped so that the first ordinal corresponds to the exponentiation of the
+    third angle in the (Z, Y, Z) pair.
+
+    Args:
+        j: The degree index.
+        k: The order index.
+        m: The order index.
+        quarter_table: The quarter table of Wigner d-coefficients.
+
+    Returns:
+        d_jkm: The Wigner d-coefficient for the given indices.
+
+    d^j_-k_-m = (-1)^(k-m) d^j_k_m
+
+    d^j_k_-m(BETA) = (-1)^(j + k + 2m) d^j_k_m(π - BETA)
+
+    d^j_-k_m(BETA) = (-1)^(j + 2k + 3m) d^j_k_m(π - BETA)
+
+    For BETA = π/2, we have: d^j_k_m(π - π/2) = (-1)^(j + k + m) d^j_k_m(π/2)
+
+    So that...
+
+    d^j_-k_-m = (-1)^(k-m) d^j_k_m
+
+    d^j_k_-m = (-1)^(j + 2k + 3m) d^j_k_m
+
+    d^j_-k_m = (-1)^(j + k + 2m) d^j_k_m
+
+    d^j_m_k = (-1)^(k-m) d^j_k_m
+
+    """
+
+    # calculate the symmetry relation for the Wigner d-coefficients
+    mask_need_swap = torch.abs(k) < torch.abs(m)
+
+    k_ind = torch.where(mask_need_swap, m, k)
+    m_ind = torch.where(mask_need_swap, k, m)
+
+    k_ind_abs = torch.abs(k_ind)
+    m_ind_abs = torch.abs(m_ind)
+
+    mask_both_neg = (k_ind < 0) & (m_ind < 0)
+    mask_only_k_neg = (k_ind < 0) & (m_ind >= 0)
+    mask_only_m_neg = (m_ind < 0) & (k_ind >= 0)
+
+    prefactor = (
+        torch.where(
+            mask_both_neg,
+            (-1.0) ** (k_ind - m_ind),
+            1.0,
+        )
+        * torch.where(
+            mask_only_k_neg,
+            (-1.0) ** (j - m_ind),
+            1.0,
+        )
+        * torch.where(
+            mask_only_m_neg,
+            (-1.0) ** (j + k_ind),
+            1.0,
+        )
+        * torch.where(
+            mask_need_swap,
+            (-1.0) ** (k_ind - m_ind),
+            1.0,
+        )
+    )
+
+    return quarter_table[j, k_ind_abs, m_ind_abs] * prefactor
+
+
 # @torch.jit.script
 def wigner_d_SHT_weights_half_pi(
-    B: int,
+    L: int,
     device: torch.device = torch.device("cpu"),
 ):
     """
 
     Args:
-        degree_max: The maximum degree to calculate d_jkm for.
-        order_max: The maximum order to calculate d_jkm for.
-        device: The device to build the table on.
+        L: The maximum degree to calculate d_jkm for.
 
     Returns:
         zeta: The Wigner d-coefficients for the spherical harmonic transform weights.
 
     """
 
-    order_max = B - 1
+    order_max = L - 1
 
     # build the volume of the Wigner d-coefficients
     d_jkm_volume = build_jkm_volume_half_pi(
@@ -538,7 +622,7 @@ def wigner_d_SHT_weights_half_pi(
     )
 
     """
-    prefactors (doesn't clearly correspond to any equation in the PDF... Yikes!)
+    TS2Kit prefactors (doesn't clearly correspond to any equation in the PDF... Yikes!)
 
     N = 2 * degree_max
 
@@ -593,7 +677,7 @@ def wigner_d_SHT_weights_half_pi(
     m_eq_0_mask = m == 0
     m_eq_j_mask = m == j
 
-    N = 2 * B
+    N = 2 * L
 
     term = torch.where(
         k_mod_2_mask,
@@ -633,13 +717,64 @@ def wigner_d_SHT_weights_half_pi(
     coeff_valid = coeff[valid_indices]
 
     # get the sparse tensor indices
-    first_indices = (k_valid + order_max) * B + j_valid
+    first_indices = (k_valid + order_max) * L + j_valid
     second_indices = N * (k_valid + order_max) + m_valid
 
     return torch.sparse_coo_tensor(
         torch.stack([first_indices, second_indices], dim=0),
         coeff_valid,
-        [B * (2 * B - 1), 2 * B * (2 * B - 1)],
+        [L * (2 * L - 1), 2 * L * (2 * L - 1)],
         dtype=torch.float64,
         device=device,
     )
+
+
+@torch.jit.script
+def wigner_d_SOFT_weights(
+    L: int,
+    device: torch.device = torch.device("cpu"),
+):
+    """
+
+    Args:
+        L: The maximum degree to calculate d_jkm for.
+        device: The device to run the computations on.
+
+    Returns:
+        zeta: The Wigner d-coefficients for the spherical harmonic transform weights.
+
+    """
+
+    order_max = L - 1
+
+    # build the volume of the Wigner d-coefficients
+    d_jkm_volume = build_jkm_volume_half_pi(
+        degree_max=L,
+        order_max=order_max,
+        device=device,
+    )
+
+    # use symmetry relations to fill in the rest of the quarter table
+    # where j >= k and j >= m but k need not be greater than m
+    j_all, k_all, m_all = torch.meshgrid(
+        torch.arange(0, L, dtype=torch.int32, device=device),
+        torch.arange(-order_max, order_max + 1, dtype=torch.int32, device=device),
+        torch.arange(-order_max, order_max + 1, dtype=torch.int32, device=device),
+    )
+
+    valid_wrt_data = (j_all >= torch.abs(k_all)) & (j_all >= torch.abs(m_all))
+
+    j = j_all[valid_wrt_data]
+    k = k_all[valid_wrt_data]
+    m = m_all[valid_wrt_data]
+
+    entire_volume = torch.zeros(
+        (L, 2 * L - 1, 2 * L - 1),
+        dtype=torch.float64,
+        device=device,
+    )
+
+    entire_volume[j, k + order_max, m + order_max] = access_d_beta_half_pi(
+        j, k, m, d_jkm_volume
+    )
+    return entire_volume

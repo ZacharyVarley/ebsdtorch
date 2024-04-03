@@ -9,7 +9,7 @@ to each use their own convoluted coordinate systems and conventions. Nice!
 from typing import Optional, Tuple, Union
 import torch
 from torch import Tensor
-from torch.nn import Module, Parameter
+from torch.nn import Module
 
 
 class RigidPlanar(Module):
