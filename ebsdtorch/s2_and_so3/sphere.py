@@ -68,46 +68,70 @@ def rosca_lambert(pts: Tensor) -> Tensor:
     Returns:
         torch tensor of shape (..., 2) containing the projected points
     """
-    # get shape of input
-    shape_in = pts.shape[:-1]
-    n_pts = int(torch.prod(torch.tensor(shape_in)))
-
-    # symbolically reshape pts
-    pts = pts.view(-1, 3)
-
     # x-axis and y-axis on the plane are labeled a and b
     x, y, z = pts[..., 0], pts[..., 1], pts[..., 2]
 
-    # Define output tensor
-    out = torch.empty((n_pts, 2), dtype=pts.dtype, device=pts.device)
+    # floating point error can yield z above 1.0 example for float32 is:
+    # xyz = [1.7817265e-04, 2.8403841e-05, 1.0000001e0]
+    # so we have to clamp to avoid sqrt of negative number
+    factor = torch.sqrt(torch.clamp(2.0 * (1.0 - torch.abs(z)), min=0.0))
 
-    # Define conditions and calculations
     cond = torch.abs(y) <= torch.abs(x)
-    factor = torch.sqrt(2.0 * (1.0 - torch.abs(z)))
-
-    # instead of precalcuating each branch, just use the condition to select the correct branch
-    out[cond, 0] = torch.sign(x[cond]) * factor[cond] * (2.0 / (8.0**0.5))
-    out[cond, 1] = (
-        torch.sign(x[cond])
-        * factor[cond]
-        * torch.atan2(
-            y[cond] * torch.sign(x[cond]),
-            x[cond] * torch.sign(x[cond]),
-        )
+    big = torch.where(cond, x, y)
+    sml = torch.where(cond, y, x)
+    simpler_term = torch.where(big < 0, -1, 1) * factor * (2.0 / (8.0**0.5))
+    arctan_term = (
+        torch.where(big < 0, -1, 1)
+        * factor
+        * torch.atan2(sml * torch.where(big < 0, -1, 1), torch.abs(big))
         * (2.0 * (2.0**0.5) / torch.pi)
     )
-    out[~cond, 0] = (
-        torch.sign(y[~cond])
-        * factor[~cond]
-        * torch.atan2(
-            x[~cond] * torch.sign(y[~cond]),
-            y[~cond] * torch.sign(y[~cond]),
-        )
+    # stack them together but flip the order if the condition is false
+    out = torch.stack((simpler_term, arctan_term), dim=-1)
+    out = torch.where(cond[..., None], out, out.flip(-1))
+    return out
+
+
+@torch.jit.script
+def rosca_lambert_side_by_side(pts: Tensor) -> Tensor:
+    """
+    Map unit sphere to (-1, 1) X (-1, 1) square via square Rosca-Lambert
+    projection. Points with a positive z-coordinate are projected to the left
+    side of the square, while points with a negative z-coordinate are projected
+    to the right side of the square.
+
+    Args:
+        pts: torch tensor of shape (..., 3) containing the points
+
+    Returns:
+        torch tensor of shape (..., 2) containing the projected points
+
+    """
+    # x-axis and y-axis on the plane are labeled a and b
+    x, y, z = pts[..., 0], pts[..., 1], pts[..., 2]
+
+    # floating point error can yield z above 1.0 example for float32 is:
+    # xyz = [1.7817265e-04, 2.8403841e-05, 1.0000001e0]
+    # so we have to clamp to avoid sqrt of negative number
+    factor = torch.sqrt(torch.clamp(2.0 * (1.0 - torch.abs(z)), min=0.0))
+
+    cond = torch.abs(y) <= torch.abs(x)
+    big = torch.where(cond, x, y)
+    sml = torch.where(cond, y, x)
+    simpler_term = torch.where(big < 0, -1, 1) * factor * (2.0 / (8.0**0.5))
+    arctan_term = (
+        torch.where(big < 0, -1, 1)
+        * factor
+        * torch.atan2(sml * torch.where(big < 0, -1, 1), torch.abs(big))
         * (2.0 * (2.0**0.5) / torch.pi)
     )
-    out[~cond, 1] = torch.sign(y[~cond]) * factor[~cond] * (2.0 / (8.0**0.5))
-
-    return out.reshape(shape_in + (2,))
+    # stack them together but flip the order if the condition is false
+    out = torch.stack((simpler_term, arctan_term), dim=-1)
+    out = torch.where(cond[..., None], out, out.flip(-1))
+    # halve the x index for all points then subtract 0.5 to move to [-1, 0]
+    # then add 1 if z is negative to move to [0, 1]
+    out[..., 0] = (out[..., 0] / 2.0) - 0.5 + torch.where(z < 0, 1.0, 0)
+    return out
 
 
 @torch.jit.script

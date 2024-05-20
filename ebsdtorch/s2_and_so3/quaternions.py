@@ -35,7 +35,7 @@ def qu_std(qu: Tensor) -> Tensor:
     Returns:
         Standardized quaternions as tensor of shape (..., 4).
     """
-    return qu * torch.sign(qu[..., 0:1])
+    return torch.where(qu[..., 0:1] >= 0, qu, -qu)
 
 
 @torch.jit.script
@@ -195,12 +195,22 @@ def qu_apply(qu: Tensor, point: Tensor) -> Tensor:
     Returns:
         Tensor of rotated points of shape (..., 3).
     """
-    real_parts = point.new_zeros(point.shape[:-1] + (1,))
-    point_as_quaternion = torch.cat((real_parts, point), -1)
-    return qu_prod_axis(
-        qu_prod_raw(qu, point_as_quaternion),
-        qu_conj(qu),
-    )
+    aw, ax, ay, az = qu[..., 0], qu[..., 1], qu[..., 2], qu[..., 3]
+    bx, by, bz = point[..., 0], point[..., 1], point[..., 2]
+
+    # need qu_prod_axis(qu_prod_raw(qu, point_as_quaternion), qu_conj(qu))
+    # do qu_prod_raw(qu, point_as_quaternion) first to get intermediate values
+    iw = aw - ax * bx - ay * by - az * bz
+    ix = aw * bx + ax + ay * bz - az * by
+    iy = aw * by - ax * bz + ay + az * bx
+    iz = aw * bz + ax * by - ay * bx + az
+
+    # next qu_prod_axis(qu_prod_raw(qu, point_as_quaternion), qu_conj(qu))
+    ox = -iw * ax + ix * aw - iy * az + iz * ay
+    oy = -iw * ay + ix * az + iy * aw - iz * ax
+    oz = -iw * az - ix * ay + iy * ax + iz * aw
+
+    return torch.stack((ox, oy, oz), -1)
 
 
 @torch.jit.script

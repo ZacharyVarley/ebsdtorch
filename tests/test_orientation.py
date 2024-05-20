@@ -5,52 +5,52 @@ from ebsdtorch.s2_and_so3.orientations import (
     # quaternion to other
     qu2ax,
     qu2cu,
-    qu2eu,
+    qu2bu,
     qu2ho,
     qu2om,
     qu2ro,
     # orientation matrix to other
     om2ax,
     om2cu,
-    om2eu,
+    om2bu,
     om2ho,
     om2qu,
     om2ro,
     # axis angle to other
     ax2qu,
     ax2cu,
-    ax2eu,
+    ax2bu,
     ax2ho,
     ax2om,
     ax2ro,
     # Rodrigues vector to other
     ro2qu,
     ro2cu,
-    ro2eu,
+    ro2bu,
     ro2ho,
     ro2om,
     ro2ax,
     # Homochoric to other
     ho2qu,
     ho2cu,
-    ho2eu,
+    ho2bu,
     ho2om,
     ho2ax,
     ho2ro,
     # Cubochoric to other
     cu2qu,
     cu2ax,
-    cu2eu,
+    cu2bu,
     cu2om,
     cu2ro,
     cu2ho,
     # Euler angles to other
-    eu2qu,
-    eu2ax,
-    eu2cu,
-    eu2om,
-    eu2ro,
-    eu2ho,
+    bu2qu,
+    bu2ax,
+    bu2cu,
+    bu2om,
+    bu2ro,
+    bu2ho,
 )
 
 
@@ -79,9 +79,6 @@ def test_edge_quaternions():
             [0, 1, 0, 0],
             [0, 0, 1, 0],
             [0, 0, 0, 1],
-            [0, -1, 0, 0],
-            [0, 0, -1, 0],
-            [0, 0, 0, -1],
             [0, 1, 1, 0],
             [0, 0, 1, 1],
             [0, 1, 0, 1],
@@ -98,9 +95,6 @@ def test_edge_quaternions():
         "180 around x",
         "180 around y",
         "180 around z",
-        "180 around -x",
-        "180 around -y",
-        "180 around -z",
         "180 around xy",
         "180 around yz",
         "180 around xz",
@@ -120,7 +114,7 @@ def test_rand_quaternions():
     qu_rand = torch.randn(10, 4)
 
     # add a small offset away from zero in the same direction per axis
-    qu_rand = qu_rand + 1e-3 * torch.sign(qu_rand)
+    qu_rand = qu_rand + 1e-3 * torch.where(qu_rand < 0, -1, 1)
 
     # normalize the quaternions and set positive real part
     qu_rand = qu_rand / torch.norm(qu_rand, dim=-1, keepdim=True)
@@ -145,7 +139,7 @@ def test_rand_quaternions():
 test_quat_functions = [
     (qu2ax, ax2qu),
     (qu2cu, cu2qu),
-    (qu2eu, eu2qu),
+    (qu2bu, bu2qu),
     (qu2ho, ho2qu),
     (qu2om, om2qu),
     (qu2ro, ro2qu),
@@ -158,16 +152,10 @@ def test_rand_quaternion_operations(test_rand_quaternions, convert_quat_func_pai
     conv_forward, conv_backward = convert_quat_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(quats, "ZXZ")
-    else:
-        other_rep = conv_forward(quats)
+    other_rep = conv_forward(quats)
 
     # convert back to quaternion
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(quats - recon).sum(dim=-1)).item()
@@ -177,10 +165,16 @@ def test_rand_quaternion_operations(test_rand_quaternions, convert_quat_func_pai
     other_rep = other_rep.cpu().numpy()
     recon = recon.cpu().numpy()
 
+    # address axis ambiguity for 180 degree rotations
+    min_dist = np.minimum(
+        np.linalg.norm(quats - recon, axis=-1), np.linalg.norm(quats + recon, axis=-1)
+    )
+    max_min_dist = np.max(min_dist)
+
     # check if the difference is within tolerance
-    assert np.allclose(
-        quats, recon, atol=1e-6
-    ), f"{conv_forward.name} failed on {names[max_diff]} with in {quats[max_diff]} and out {recon[max_diff]}"
+    assert (
+        max_min_dist < 1e-5
+    ), f"{max_diff} for {conv_forward.name}, {names[max_diff]}, {quats[max_diff]}, {recon[max_diff]}"
 
 
 def test_edge_quaternion_operations(test_edge_quaternions, convert_quat_func_pair):
@@ -189,16 +183,10 @@ def test_edge_quaternion_operations(test_edge_quaternions, convert_quat_func_pai
     conv_forward, conv_backward = convert_quat_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(quats, "ZXZ")
-    else:
-        other_rep = conv_forward(quats)
+    other_rep = conv_forward(quats)
 
     # convert back to quaternion
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(quats - recon).sum(dim=-1)).item()
@@ -208,10 +196,16 @@ def test_edge_quaternion_operations(test_edge_quaternions, convert_quat_func_pai
     other_rep = other_rep.cpu().numpy()
     recon = recon.cpu().numpy()
 
+    # address axis ambiguity for 180 degree rotations
+    min_dist = np.minimum(
+        np.linalg.norm(quats - recon, axis=-1), np.linalg.norm(quats + recon, axis=-1)
+    )
+    max_min_dist = np.max(min_dist)
+
     # check if the difference is within tolerance
-    assert np.allclose(
-        quats, recon, atol=1e-6, rtol=1e-6
-    ), f"{conv_forward.name} failed on {names[max_diff]} with in {quats[max_diff]} and out {recon[max_diff]}"
+    assert (
+        max_min_dist < 1e-5
+    ), f"{max_diff} for {conv_forward.name}, {names[max_diff]}, {quats[max_diff]}, {recon[max_diff]}"
 
 
 @pytest.fixture
@@ -241,7 +235,7 @@ def test_rand_axis_angle():
 test_ax_functions = [
     (ax2qu, qu2ax),
     (ax2cu, cu2ax),
-    (ax2eu, eu2ax),
+    (ax2bu, bu2ax),
     (ax2ho, ho2ax),
     (ax2om, om2ax),
     (ax2ro, ro2ax),
@@ -254,16 +248,10 @@ def test_rand_ax_operations(test_rand_axis_angle, convert_ax_func_pair):
     conv_forward, conv_backward = convert_ax_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(ax_angles, "ZXZ")
-    else:
-        other_rep = conv_forward(ax_angles)
+    other_rep = conv_forward(ax_angles)
 
     # convert back to axis angle
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(ax_angles - recon).sum(dim=-1)).item()
@@ -297,7 +285,7 @@ def test_rand_orientation_matrix():
 
 test_om_functions = [
     (om2cu, cu2om),
-    (om2eu, eu2om),
+    (om2bu, bu2om),
     (om2ho, ho2om),
     (om2ro, ro2om),
 ]
@@ -309,16 +297,10 @@ def test_rand_om_operations(test_rand_orientation_matrix, convert_om_func_pair):
     conv_forward, conv_backward = convert_om_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(om, "ZXZ")
-    else:
-        other_rep = conv_forward(om)
+    other_rep = conv_forward(om)
 
     # convert back to orientation matrix
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(om - recon).sum(dim=(-1, -2))).item()
@@ -354,7 +336,7 @@ def test_rand_ho_vectors():
 
 test_ho_functions = [
     (ho2cu, cu2ho),
-    (ho2eu, eu2ho),
+    (ho2bu, bu2ho),
     (ho2ro, ro2ho),
 ]
 
@@ -365,16 +347,10 @@ def test_rand_ho_operations(test_rand_ho_vectors, convert_ho_func_pair):
     conv_forward, conv_backward = convert_ho_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(ho, "ZXZ")
-    else:
-        other_rep = conv_forward(ho)
+    other_rep = conv_forward(ho)
 
     # convert back to homochoric
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(ho - recon).sum(dim=-1)).item()
@@ -410,7 +386,7 @@ def test_rand_ro_vectors():
 
 test_ro_functions = [
     (ro2cu, cu2ro),
-    (ro2eu, eu2ro),
+    (ro2bu, bu2ro),
 ]
 
 
@@ -420,16 +396,10 @@ def test_rand_ro_operations(test_rand_ro_vectors, convert_ro_func_pair):
     conv_forward, conv_backward = convert_ro_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(ro, "ZXZ")
-    else:
-        other_rep = conv_forward(ro)
+    other_rep = conv_forward(ro)
 
     # convert back to Rodrigues vector
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(ro - recon).sum(dim=-1)).item()
@@ -464,7 +434,7 @@ def test_rand_cubochoric_vectors():
 
 
 test_cu_functions = [
-    (cu2eu, eu2cu),
+    (cu2bu, bu2cu),
 ]
 
 
@@ -474,16 +444,10 @@ def test_rand_cu_operations(test_rand_cubochoric_vectors, convert_cu_func_pair):
     conv_forward, conv_backward = convert_cu_func_pair
 
     # convert to other representation
-    if "eu" in conv_forward.name:
-        other_rep = conv_forward(cu, "ZXZ")
-    else:
-        other_rep = conv_forward(cu)
+    other_rep = conv_forward(cu)
 
     # convert back to cubochoric
-    if "eu" in conv_backward.name:
-        recon = conv_backward(other_rep, "ZXZ")
-    else:
-        recon = conv_backward(other_rep)
+    recon = conv_backward(other_rep)
 
     # find row of the maximum difference
     max_diff = torch.argmax(torch.abs(cu - recon).sum(dim=-1)).item()

@@ -483,10 +483,10 @@ def ori_equiv_laue(quats: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
-def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
+def ori_in_fz_laue_brute(quats: Tensor, laue_id: int) -> Tensor:
     """
-    Determine if the given quaternions are in the orientation fundamental zone
-    of the given Laue group, not the misorientation fundamental zone.
+    Determine if the given unit quaternions with positive real part are in the
+    orientation fundamental zone of the given Laue group.
 
     Args:
         quats: quaternions to move to fundamental zone of shape (..., 4)
@@ -494,6 +494,9 @@ def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
 
     Returns:
         mask of quaternions in fundamental zone of shape (...,)
+
+    Raises:
+        ValueError: if the laue_id is not supported
 
     """
     # get the important shapes
@@ -513,6 +516,120 @@ def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
     # first element is always the identity for the enumerations of the Laue operators
     # so if its index is 0, then a given orientation was already in the fundamental zone
     return (row_maximum_indices == 0).reshape(data_shape[:-1])
+
+
+@torch.jit.script
+def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
+    """
+    Determine if the given unit quaternions with positive real part are in the
+    orientation fundamental zone of the given Laue group.
+
+    Args:
+        quats: quaternions to move to fundamental zone of shape (..., 4)
+        laue_id: laue group of quaternions to move to fundamental zone
+
+    Returns:
+        mask of quaternions in fundamental zone of shape (...,)
+
+    Raises:
+        ValueError: if the laue_id is not supported
+
+    """
+    # all of the bound equality checks have to be inclusive to
+    # match the behavior of the brute force method
+    if laue_id == 11:
+        # O: cubic high
+        # max(abs(x,y,z)) < R2M1*abs(w) and sum(abs(x,y,z)) < abs(w)
+        xyz_abs = torch.abs(quats[..., 1:])
+        return (
+            torch.max(xyz_abs, dim=-1).values <= (quats[..., 0] * (2**0.5 - 1))
+        ) & (torch.sum(xyz_abs, dim=-1) <= quats[..., 0])
+    elif laue_id == 10:
+        # T: cubic low
+        # sum(abs(x,y,z)) < abs(w)
+        return torch.sum(torch.abs(quats[..., 1:]), dim=-1) <= quats[..., 0]
+    elif laue_id == 9:
+        # D6: hexagonal high
+        # m, n = max(abs(x,y)), min(abs(x,y))
+        # if m > TAN75 * n then rot = m else rot = R3O2 * m + 0.5 * n
+        # if abs(z) < TAN15 * abs(w) and rot < abs(w) then in FZ
+        x_abs, y_abs = torch.abs(quats[..., 1]), torch.abs(quats[..., 2])
+        cond = x_abs > y_abs
+        m = torch.where(cond, x_abs, y_abs)
+        n = torch.where(cond, y_abs, x_abs)
+        rot = torch.where(m > (2 + 3**0.5) * n, m, (3**0.5 / 2) * m + 0.5 * n)
+        return (torch.abs(quats[..., 3]) <= (2 - 3**0.5) * quats[..., 0]) & (
+            rot <= quats[..., 0]
+        )
+    elif laue_id == 8:
+        # C6: hexagonal low
+        # if abs(z) < TAN15 * abs(w)
+        return torch.abs(quats[..., 3]) <= ((2 - 3**0.5) * quats[..., 0])
+    elif laue_id == 7:
+        # D3: trigonal high
+        # if abs(x) > abs(y) * R3:
+        #   rot = abs(x)
+        # else:
+        # rot = R3O2 * abs(y) + 0.5 * abs(x)
+        # FZ: if abs(z) < TAN30 * abs(w) and rot < abs(w)
+        rot = torch.where(
+            torch.abs(quats[..., 1]) >= torch.abs(quats[..., 2]) * (3**0.5),
+            torch.abs(quats[..., 1]),
+            (3**0.5 / 2) * torch.abs(quats[..., 2]) + 0.5 * torch.abs(quats[..., 1]),
+        )
+        return (torch.abs(quats[..., 3]) <= ((1.0 / 3**0.5) * quats[..., 0])) & (
+            rot <= quats[..., 0]
+        )
+    elif laue_id == 6:
+        # C3: trigonal low
+        # FZ: abs(z) < TAN30 * abs(w)
+        return torch.abs(quats[..., 3]) <= (1.0 / 3**0.5) * quats[..., 0]
+    elif laue_id == 5:
+        # D4: tetragonal high
+        # m, n = max(abs(x,y)), min(abs(x,y))
+        # if m > TAN67_5 * n then rot = m else rot = R2O2 * m + R2O2 * n
+        # FZ: abs(z) < TAN22_5 * abs(w) and rot < abs(w)
+        x_abs, y_abs = torch.abs(quats[..., 1]), torch.abs(quats[..., 2])
+        cond = x_abs > y_abs
+        m = torch.where(cond, x_abs, y_abs)
+        n = torch.where(cond, y_abs, x_abs)
+        rot = torch.where(m > (2**0.5 + 1) * n, m, (1 / 2**0.5) * m + (1 / 2**0.5) * n)
+        return (torch.abs(quats[..., 3]) <= ((2**0.5 - 1) * quats[..., 0])) & (
+            rot <= quats[..., 0]
+        )
+    elif laue_id == 4:
+        # C4: tetragonal low
+        # FZ: abs(z) < TAN22_5 * abs(w)
+        return torch.abs(quats[..., 3]) <= (2**0.5 - 1) * quats[..., 0]
+    elif laue_id == 3:
+        # D2: orthorhombic
+        # FZ: max(abs(x,y,z)) < abs(w)
+        return torch.max(torch.abs(quats[..., 1:]), dim=-1).values <= quats[..., 0]
+    elif laue_id == 2:
+        # C2: monoclinic
+        # FZ: abs(z) < abs(w)
+        return torch.abs(quats[..., 3]) <= quats[..., 0]
+    elif laue_id == 1:
+        # C1: triclinic
+        return torch.full(quats.shape[:-1], True, dtype=torch.bool, device=quats.device)
+    else:
+        raise ValueError(f"Laue group {laue_id} is not supported")
+
+
+# # test that ori_in_fz_laue_old is equivalent to ori_in_fz_laue
+# for laue_id in range(1, 12):
+#     quats = torch.rand(10000000, 4) - 0.5
+#     quats = quats / quats.norm(dim=-1, keepdim=True)
+#     quats = quats * torch.where(quats[..., 0] < 0, -1, 1).unsqueeze(-1)
+#     try:
+#         assert torch.all(
+#             ori_in_fz_laue_brute(quats, laue_id) == ori_in_fz_laue(quats, laue_id)
+#         )
+#         print(f"Laue group {laue_id} passed")
+#     except AssertionError:
+#         # print the first error inducing quaternion
+#         mask = ori_in_fz_laue_brute(quats, laue_id) != ori_in_fz_laue(quats, laue_id)
+#         print(quats[torch.where(mask)][0])
 
 
 @torch.jit.script

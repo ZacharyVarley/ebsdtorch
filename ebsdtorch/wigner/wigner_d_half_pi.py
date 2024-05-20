@@ -760,6 +760,7 @@ def wigner_d_SOFT_weights(
         torch.arange(0, L, dtype=torch.int32, device=device),
         torch.arange(-order_max, order_max + 1, dtype=torch.int32, device=device),
         torch.arange(-order_max, order_max + 1, dtype=torch.int32, device=device),
+        indexing="ij",
     )
 
     valid_wrt_data = (j_all >= torch.abs(k_all)) & (j_all >= torch.abs(m_all))

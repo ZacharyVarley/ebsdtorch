@@ -36,7 +36,7 @@ from ebsdtorch.ebsd_dictionary_indexing.utils_progress_bar import progressbar
 
 class LinearLayer(Module):
     """
-    This is a wrapper around torch.nn.Linear defines a no bias linear layer
+    This is a wrapper around torch.nn.Linear defining a no bias linear layer
     model. The 8-bit quantized arithmetic libraries take neural networks as
     inputs. This allows us to quantize a simple matrix multiplication.
 
@@ -144,7 +144,7 @@ def knn(
     # if quantized, raise an error and say only CPU is supported
     if quantized and match_device != torch.device("cpu"):
         raise NotImplementedError(
-            "Quantized arithmetic is only supported on the CPU at this time."
+            "Quantized arithmetic is only supported on x86 CPUs at this time."
         )
 
     # shapes
@@ -230,3 +230,198 @@ def knn(
     knn_indices_into_dict = torch.gather(knn_i_global, 1, knn_i_into_global)
 
     return knn_indices_into_dict.to(device_in)
+
+
+class KNNIndexer:
+    def __init__(
+        self,
+        data_size: int,
+        query_size: int,
+        topk: int,
+        match_device: torch.device,
+        distance_metric: str = "angular",
+        match_dtype: torch.dtype = torch.float16,
+        quantized: bool = True,
+    ):
+        """
+        Initialize the KNNIndexer.
+
+        Args:
+            data_size (int): The total number of data entries.
+            query_size (int): The total number of query entries.
+            topk (int): The number of nearest neighbors to return.
+            match_device (torch.device): The device to use for matching.
+            distance_metric (str): The distance metric to use ('angular', 'euclidean', or 'manhattan').
+            match_dtype (torch.dtype): The data type to use for matching.
+            quantized (bool): Whether to use quantized arithmetic.
+        """
+        self.data_size = data_size
+        self.query_size = query_size
+        self.topk = topk
+        self.match_device = match_device
+        self.distance_metric = distance_metric
+        self.match_dtype = match_dtype
+        self.quantized = quantized
+
+        self.larger_better = self.distance_metric == "angular"
+        self.data_chunk = None
+        self.data_start = 0
+        self.data_quantized = None
+        self.knn_indices = torch.empty(
+            (self.query_size, self.topk), device=self.match_device, dtype=torch.int64
+        )
+        self.knn_distances = torch.full(
+            (self.query_size, self.topk),
+            -torch.inf if self.larger_better else torch.inf,
+            device=self.match_device,
+            dtype=self.match_dtype,
+        )
+
+    def set_data_chunk(self, data_chunk: Tensor, data_start: int):
+        """
+        Set the current data chunk.
+
+        Args:
+            data_chunk (Tensor): The data chunk to set.
+            data_start (int): The starting index of the data chunk in the full data tensor.
+        """
+        data_chunk = data_chunk.to(self.match_dtype).to(self.match_device)
+        self.data_start = data_start
+        if self.quantized and self.match_device.type == "cpu":
+            self.data_quantized = quant_model_data(data_chunk)
+            self.data_chunk = None
+        else:
+            self.data_quantized = None
+            self.data_chunk = data_chunk
+
+    def query(self, query_chunk: Tensor, query_start: int):
+        """
+        Perform k-nearest neighbors search on a query chunk.
+
+        Args:
+            query_chunk (Tensor): The query chunk to search.
+            query_start (int): The starting index of the query chunk in the full query tensor.
+
+        """
+        query_end = query_start + query_chunk.shape[0]
+        query_chunk = query_chunk.to(self.match_dtype).to(self.match_device)
+
+        if self.data_quantized is not None:
+            knn_distances_chunk, knn_indices_chunk = topk_quantized_data(
+                query_chunk, self.data_quantized, self.topk
+            )
+        else:
+            knn_distances_chunk, knn_indices_chunk = knn_batch(
+                self.data_chunk, query_chunk, self.topk, self.distance_metric
+            )
+
+        knn_indices_chunk += self.data_start
+
+        # Merge the old and new top-k indices and distances
+        old_knn_indices = self.knn_indices[query_start:query_end]
+        old_knn_distances = self.knn_distances[query_start:query_end]
+        merged_knn_distances = torch.cat(
+            (old_knn_distances, knn_distances_chunk), dim=1
+        )
+        merged_knn_indices = torch.cat((old_knn_indices, knn_indices_chunk), dim=1)
+        topk_indices = torch.topk(
+            merged_knn_distances, self.topk, dim=1, largest=self.larger_better
+        )[1]
+        self.knn_indices[query_start:query_end] = torch.gather(
+            merged_knn_indices, 1, topk_indices
+        )
+        self.knn_distances[query_start:query_end] = torch.gather(
+            merged_knn_distances, 1, topk_indices
+        )
+
+    def retrieve_topk(
+        self,
+    ) -> Tensor:
+        """
+        Retrieve the top-k nearest neighbors.
+
+        Args:
+            device (torch.device): The device to return the results on.
+
+        Returns:
+            Tensor: The indices of the nearest neighbors.
+        """
+        return self.knn_indices, self.knn_distances
+
+
+# test the KNNIndexer against cdist
+if __name__ == "__main__":
+    from torch import cdist
+    from time import time
+
+    # set the seed
+    torch.manual_seed(0)
+
+    # set the sizes
+    data_size = 1000
+    query_size = 5
+    data_dim = 50
+    query_dim = 50
+    topk = 3
+
+    # set the data and query
+    data = torch.randn(data_size, data_dim)
+    query = torch.randn(query_size, query_dim)
+
+    # set the indexer
+    indexer = KNNIndexer(
+        data_size=data_size,
+        query_size=query_size,
+        topk=topk,
+        match_device=torch.device("cpu"),
+        distance_metric="angular",
+        match_dtype=torch.float32,
+        quantized=True,
+    )
+
+    # set the chunk sizes
+    data_chunk_size = 10
+    query_chunk_size = 5
+
+    # set the start time
+    start = time()
+
+    # index the patterns
+    for data_start in range(0, data_size, data_chunk_size):
+        data_chunk = data[data_start : data_start + data_chunk_size]
+        indexer.set_data_chunk(data_chunk, data_start)
+        for query_start in range(0, query_size, query_chunk_size):
+            query_chunk = query[query_start : query_start + query_chunk_size]
+            indexer.query(query_chunk, query_start)
+
+    # get the indices
+    indices, distances = indexer.retrieve_topk()
+
+    # get the end time
+    end = time()
+
+    # print the time
+    print(f"KNNIndexer time: {end - start}")
+
+    # set the start time
+    start = time()
+
+    # get the indices using cdist
+    # dist = cdist(query, data)
+
+    dist = query @ data.t()
+
+    indices_cdist = torch.topk(dist, topk, dim=1, largest=True)[1]
+
+    # get the end time
+    end = time()
+
+    # print the time
+    print(f"cdist time: {end - start}")
+
+    print(indices)
+    print(indices_cdist)
+
+    # check the indices
+    assert torch.allclose(indices, indices_cdist)
+    print("Success!")

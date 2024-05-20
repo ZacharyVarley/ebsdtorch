@@ -81,7 +81,7 @@ def so3_fibonacci(
         device (torch.device): the device to use
 
     Returns:
-        torch.Tensor: the 3D super Fibonacci sampling quaternions (n, 4)
+        Tensor: the 3D super Fibonacci sampling quaternions (n, 4)
 
     """
 
@@ -89,6 +89,7 @@ def so3_fibonacci(
     # positive real solution to PSI^4 = PSI + 4
     PSI = 1.533751168755204288118041
 
+    # don't use float32 for large numbers of points
     indices = torch.arange(n, device=device, dtype=torch.float64)
     s = indices + 0.5
     t = s / n
@@ -120,7 +121,7 @@ def so3_cu_rand(n: int, device: torch.device) -> Tensor:
         device (torch.device): the device to use
 
     Returns:
-        torch.Tensor: Quaternions of shape (n, 4) in form (w, x, y, z)
+        Tensor: Quaternions of shape (n, 4) in form (w, x, y, z)
 
     """
     box_sampling = torch.rand(n, 3, device=device) * torch.pi ** (
@@ -129,6 +130,46 @@ def so3_cu_rand(n: int, device: torch.device) -> Tensor:
     qu = cu2qu(box_sampling)
     qu = qu_std(qu / torch.norm(qu, dim=-1, keepdim=True))
     return qu
+
+
+@torch.jit.script
+def so3_uniform_quat(n: int, device: torch.device) -> Tensor:
+    """
+    Generate uniformly distributed elements of SO(3) as quaternions. This
+    routine includes both quaternion hemispheres and will return quaternions
+    with negative real part.
+
+    Args:
+        n (int): the number of orientations to sample
+        device (torch.device): the device to use
+
+    Returns:
+        torch.Tensor: the 3D random sampling in cubochoric coordinates (n, 4)
+
+
+    Notes:
+
+    This function is based on the following work of Ken Shoemake:
+
+    Shoemake, Ken. "Uniform random rotations." Graphics Gems III (IBM Version).
+    Morgan Kaufmann, 1992. 124-132.
+
+    """
+
+    # h = ( sqrt(1-u) sin(2πv), sqrt(1-u) cos(2πv), sqrt(u) sin(2πw), sqrt(u) cos(2πw))
+    u = torch.rand(n, device=device)
+    v = torch.rand(n, device=device)
+    w = torch.rand(n, device=device)
+    h = torch.stack(
+        [
+            torch.sqrt(1 - u) * torch.sin(2 * torch.pi * v),
+            torch.sqrt(1 - u) * torch.cos(2 * torch.pi * v),
+            torch.sqrt(u) * torch.sin(2 * torch.pi * w),
+            torch.sqrt(u) * torch.cos(2 * torch.pi * w),
+        ],
+        dim=1,
+    )
+    return h
 
 
 @torch.jit.script
@@ -155,45 +196,3 @@ def so3_cubochoric_grid(edge_length: int, device: torch.device):
     qu = cu2qu(cu)
     qu = qu_std(qu)
     return qu
-
-
-def so3_uniform_quat(n: int, device: torch.device) -> Tensor:
-    """
-    Generate uniformly distributed elements of SO(3) as quaternions. This
-    routine includes both quaternion hemispheres and will return quaternions
-    with negative real part.
-
-    Args:
-        n (int): the number of orientations to sample
-        device (torch.device): the device to use
-
-    Returns:
-        torch.Tensor: the 3D random sampling in cubochoric coordinates (n, 4)
-
-
-    Notes:
-
-    This function is based on the following work of Ken Shoemake:
-
-    Shoemake, Ken. "Uniform random rotations." Graphics Gems III (IBM Version).
-    Morgan Kaufmann, 1992. 124-132.
-
-    """
-
-    # h = ( sqrt(1-u) sin(2πv), sqrt(1-u) cos(2πv), sqrt(u) sin(2πw), sqrt(u) cos(2πw))
-
-    u = torch.rand(n, device=device)
-    v = torch.rand(n, device=device)
-    w = torch.rand(n, device=device)
-
-    h = torch.stack(
-        [
-            torch.sqrt(1 - u) * torch.sin(2 * torch.pi * v),
-            torch.sqrt(1 - u) * torch.cos(2 * torch.pi * v),
-            torch.sqrt(u) * torch.sin(2 * torch.pi * w),
-            torch.sqrt(u) * torch.cos(2 * torch.pi * w),
-        ],
-        dim=1,
-    )
-
-    return h

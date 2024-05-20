@@ -6,6 +6,14 @@ rigid motion in 3D Euclidean space from the following technical report:
 Blanco-Claraco, J.L., 2021. A tutorial on $\mathbf {SE}(3) $ transformation
 parameterizations and on-manifold optimization. arXiv preprint arXiv:2103.15980.
 
+I need to explicitly implement the Jacobian of SE(3) and SO(3) maps as well, as
+it is known to be numerically unstable when just relying on the PyTorch autograd
+operating on the naive implementation:
+
+Teed, Zachary, and Jia Deng. "Tangent space backpropagation for 3d
+transformation groups." In Proceedings of the IEEE/CVF conference on computer
+vision and pattern recognition, pp. 10338-10347. 2021.
+
 The Lie algebra of the special Euclidean group in 3D, $\mathbf {se}(3)$, is
 barely different than the individual translation and SO(3) rotation Lie
 algebras. They mix according to the Jacobian of SO3... see section 10.6.9 of: 
@@ -24,6 +32,14 @@ stable exponential and logarithm map for them:
 
 https://dyalab.mines.edu/papers/dantam2018practical.pdf
 
+My hunch is that in the same way that the folks found that keeping the map in
+quaternion form was more numerically stable for SO(3):
+
+https://github.com/nurlanov-zh/so3_log_map
+
+... it might be the case that doing everything with dual quaternions is more
+stable for SE(3). I will have to look into this later.
+
 #########################################################################
 ###############################  WARNING  ###############################
 #########################################################################
@@ -39,6 +55,15 @@ is one reason why the Lie algebra is often implemented with rotation matrices,
 even though they are not as efficient to work with when using them to rotate
 points in 3D. Another reason could be that the subsequent transformations of
 points (in the case of PyTorch3D) are not necessarily rotations overall.
+
+For basics on the Lie algebra of SO(3) as an example:
+
+https://arxiv.org/pdf/1606.05285
+
+Bloesch, M., Sommer, H., Laidlow, T., Burri, M., Nuetzi, G., Fankhauser, P.,
+Bellicoso, D., Gehring, C., Leutenegger, S., Hutter, M. and Siegwart, R., 2016.
+A primer on the differential calculus of 3d orientations. arXiv preprint
+arXiv:1606.05285.
 
 """
 
@@ -96,12 +121,12 @@ def w_exp(omega: Tensor) -> Tensor:
     # This prefactor is only used for the calculation of exp(skew)
     # sin(theta) / theta
     # expression: 1 - theta^2 / 6 + theta^4 / 120 - theta^6 / 5040 ...
-    prefactor1 = 1 - theta[~stable] ** 2 / 6
+    prefactor1 = 1 - theta[~stable] ** 2 / 6 + theta[~stable] ** 4 / 120
 
     # This prefactor is shared between calculations of exp(skew) and v
     # (1 - cos(theta)) / theta^2
     # expression: 1/2 - theta^2 / 24 + theta^4 / 720 - theta^6 / 40320 ...
-    prefactor2 = 1 / 2 - theta[~stable] ** 2 / 24
+    prefactor2 = 1 / 2 - theta[~stable] ** 2 / 24 + theta[~stable] ** 4 / 720
 
     skew_exp = torch.empty_like(skew_mat)
     skew_exp[stable] = (
@@ -114,7 +139,6 @@ def w_exp(omega: Tensor) -> Tensor:
         + prefactor1 * skew_mat[~stable]
         + prefactor2 * skew_sq[~stable]
     )
-
     return skew_exp
 
 
@@ -137,7 +161,7 @@ def w_exp_vmat(omega: Tensor) -> Tuple[Tensor, Tensor]:
     skew_sq = torch.matmul(skew_mat, skew_mat)
 
     # Taylor expansion for small angles of each factor
-    stable = (theta > 0.01)[..., 0, 0]
+    stable = (theta > 0.001)[..., 0, 0]
 
     # This prefactor is only used for the calculation of exp(skew)
     # sin(theta) / theta
@@ -165,13 +189,13 @@ def w_exp_vmat(omega: Tensor) -> Tuple[Tensor, Tensor]:
         + prefactor1 * skew_mat[~stable]
         + prefactor2 * skew_sq[~stable]
     )
+    # skew_exp = torch.matrix_exp(skew_mat)
 
     v = torch.empty_like(skew_mat)
     v[stable] = (
         torch.eye(3, dtype=skew_mat.dtype, device=skew_mat.device)
         + (1 - torch.cos(theta[stable])) / theta[stable] ** 2 * skew_mat[stable]
-        + (theta[stable] - torch.sin(theta[stable]))
-        / theta[stable] ** 3
+        + ((theta[stable] - torch.sin(theta[stable])) / theta[stable] ** 3)
         * skew_sq[stable]
     )
     v[~stable] = (
@@ -200,23 +224,22 @@ def w_to_v(omega: Tensor) -> Tensor:
     skew_omega2 = torch.matmul(skew_omega, skew_omega)
 
     # Taylor expansion for small angles of each factor
-    stable = (theta > 0.01)[..., 0, 0]
+    stable = (theta > 0.05)[..., 0, 0]
 
     # (1 - cos(theta)) / theta^2
     # expression: 1/2 - theta^2 / 24 + theta^4 / 720 - theta^6 / 40320 ...
-    factor1 = 1 / 2 - theta[~stable] ** 2 / 24
+    factor1 = 1 / 2 - theta[~stable] ** 2 / 24 + theta[~stable] ** 4 / 720
 
     # (theta - sin(theta)) / theta^3
     # expression: 1/6 - theta^2 / 120 + theta^4 / 5040 - theta^6 / 362880 ...
-    factor2 = 1 / 6 - theta[~stable] ** 2 / 120
+    factor2 = 1 / 6 - theta[~stable] ** 2 / 120 + theta[~stable] ** 4 / 5040
 
     v = torch.empty_like(skew_omega)
 
     v[stable] = (
         torch.eye(3, dtype=omega.dtype, device=omega.device)
-        + (1 - torch.cos(theta[stable])) / theta[stable] ** 2 * skew_omega[stable]
-        + (theta[stable] - torch.sin(theta[stable]))
-        / theta[stable] ** 3
+        + ((1 - torch.cos(theta[stable])) / theta[stable] ** 2) * skew_omega[stable]
+        + ((theta[stable] - torch.sin(theta[stable])) / theta[stable] ** 3)
         * skew_omega2[stable]
     )
     v[~stable] = (
@@ -244,7 +267,7 @@ def w_to_v_inv(omega: Tensor) -> Tensor:
     skew_omega2 = torch.matmul(skew_omega, skew_omega)
 
     v_inv = torch.empty_like(skew_omega)
-    stable = (theta > 0.01)[..., 0, 0]
+    stable = (theta > 0.05)[..., 0, 0]
     v_inv[stable] = (
         torch.eye(3, dtype=omega.dtype, device=omega.device)
         - 0.5 * skew_omega[stable]
@@ -261,7 +284,7 @@ def w_to_v_inv(omega: Tensor) -> Tensor:
     )
     # (1 - theta * cos(theta / 2) / (2 * sin(theta / 2))) / theta^2
     # expression: 1/12 + 1/720 * theta^2 + 1/30240 * theta^4
-    factor_approx = 1 / 12 + theta[~stable] ** 2 / 720
+    factor_approx = 1 / 12 + theta[~stable] ** 2 / 720 + theta[~stable] ** 4 / 30240
 
     v_inv[~stable] = (
         torch.eye(3, dtype=omega.dtype, device=omega.device)
@@ -291,7 +314,7 @@ def se3_exp_map_quat(vecs: Tensor) -> Tuple[Tensor, Tensor]:
 
     # the angle is the norm of the 3D vector
     norm = torch.linalg.norm(omegas, dim=-1, keepdim=True)
-    stable = norm > 0.0001
+    stable = norm > 0.05
     # use logsumexp trick
     theta = torch.where(
         stable,
@@ -360,6 +383,27 @@ def se3_exp_map_om(vecs: Tensor) -> Tensor:
 
 
 @torch.jit.script
+def se3_exp_map(vecs: Tensor) -> Tuple[Tensor, Tensor]:
+    """
+    Compute the SE3 matrix from omega and tvec.
+
+    Args:
+        vec: torch tensor of shape (..., 6) containing the omega and tvec
+
+    Returns:
+        torch tensor of shape (..., 3, 3) containing the rotation matrix
+        torch tensor of shape (..., 3) containing the translation vector
+
+    """
+    data_shape = vecs.shape[:-1]
+    omegas = vecs[..., :3]
+    tau = vecs[..., 3:]
+    rexp, v = w_exp_vmat(omegas)
+    tvec = torch.matmul(v, tau[..., None]).view(data_shape + (3,))
+    return rexp, tvec
+
+
+@torch.jit.script
 def se3_log_map_om(se3: Tensor) -> Tensor:
     """
     Compute omega and tvec from an SE3 matrix.
@@ -386,7 +430,7 @@ def se3_log_map_om(se3: Tensor) -> Tensor:
     theta = torch.acos(acos_arg)
 
     # where the angle is small, treat (theta/sin(theta)) as 1
-    stable = theta > 0.001
+    stable = theta > 0.01
     omegas[..., 0] = se3[..., 2, 1] - se3[..., 1, 2]
     omegas[..., 1] = se3[..., 0, 2] - se3[..., 2, 0]
     omegas[..., 2] = se3[..., 1, 0] - se3[..., 0, 1]
@@ -397,3 +441,44 @@ def se3_log_map_om(se3: Tensor) -> Tensor:
     tvecs = torch.matmul(v_inv, se3[..., :3, 3][..., None]).view(data_shape + (3,))
 
     return torch.cat([omegas, tvecs], dim=-1)
+
+
+@torch.jit.script
+def se3_log_map_R_tvec(R: Tensor, tvec: Tensor) -> Tensor:
+    """
+    Compute omega and tvec from an SE3 matrix.
+
+    Args:
+        R: torch tensor of shape (..., 3, 3) containing the rotation matrix
+        tvec: torch tensor of shape (..., 3) containing the translation vector
+
+    Returns:
+        torch tensor of shape (..., 6) containing the omega and tvec
+
+    """
+    data_shape = R.shape[:-2]
+
+    # omega is (theta / 2 sin(theta)) * (R32 - R23, R13 - R31, R21 - R12)
+    omegas = torch.zeros(data_shape + (3,), dtype=R.dtype, device=R.device)
+
+    # find the trace of the rotation matrix portion
+    rtrace = torch.diagonal(R, dim1=-2, dim2=-1).sum(-1)
+    # rtrace = torch.einsum("...ii", se3[..., :3, :3])
+
+    # find the angles
+    acos_arg = 0.5 * (rtrace - 1.0)
+    acos_arg = torch.clamp(acos_arg, -1.0, 1.0)
+    theta = torch.acos(acos_arg)
+
+    # where the angle is small, treat (theta/sin(theta)) as 1
+    stable = theta > 0.0001
+    omegas[..., 0] = R[..., 2, 1] - R[..., 1, 2]
+    omegas[..., 1] = R[..., 0, 2] - R[..., 2, 0]
+    omegas[..., 2] = R[..., 1, 0] - R[..., 0, 1]
+    factor = torch.where(stable, 0.5 * theta / torch.sin(theta), 0.5)
+    omegas = factor[:, None] * omegas
+
+    v_inv = w_to_v_inv(omegas)
+    tau = torch.matmul(v_inv, tvec[..., None]).view(data_shape + (3,))
+
+    return torch.cat([omegas, tau], dim=-1)

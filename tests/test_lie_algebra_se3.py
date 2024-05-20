@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from ebsdtorch.geometry.lie_algebra_se3 import (
+from ebsdtorch.lie_algebra.se3 import (
     se3_exp_map_om,
     se3_log_map_om,
     se3_exp_map_quat,

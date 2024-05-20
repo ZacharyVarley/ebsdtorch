@@ -13,7 +13,6 @@ ho: homochoric
 ax: axis-angle
 qu: quaternion
 om: orientation matrix
-eu: Euler angles
 bu: Bunge ZXZ Euler angles
 cl: Clifford Torus
 ro: Rodrigues-Frank vector
@@ -297,6 +296,14 @@ def cu2ho(cu: Tensor) -> Tensor:
     # abs(y) <= abs(x) condition
     mask_y_leq_x = torch.abs(y) <= torch.abs(x)
     q_y_leq_x = (torch.pi / 12.0) * y[mask_y_leq_x] / x[mask_y_leq_x]
+
+    # replace nans in q_y_leq_x with zeros in order to deal with (+/-1, 0, 0)
+    q_y_leq_x = torch.where(
+        torch.isnan(q_y_leq_x),
+        0.0,
+        q_y_leq_x,
+    )
+
     cosq_y_leq_x = torch.cos(q_y_leq_x)
     sinq_y_leq_x = torch.sin(q_y_leq_x)
     q_val_y_leq_x = prefactor * x[mask_y_leq_x] / torch.sqrt(sqrt2 - cosq_y_leq_x)
@@ -314,6 +321,14 @@ def cu2ho(cu: Tensor) -> Tensor:
     # abs(y) > abs(x) condition
     mask_y_gt_x = ~mask_y_leq_x
     q_y_gt_x = (torch.pi / 12.0) * x[mask_y_gt_x] / y[mask_y_gt_x]
+
+    # replace nans in q_y_gt_x with zeros in order to deal with (+/-1, 0, 0)
+    q_y_gt_x = torch.where(
+        torch.isnan(q_y_gt_x),
+        0.0,
+        q_y_gt_x,
+    )
+
     cosq_y_gt_x = torch.cos(q_y_gt_x)
     sinq_y_gt_x = torch.sin(q_y_gt_x)
     q_val_y_gt_x = prefactor * y[mask_y_gt_x] / torch.sqrt(sqrt2 - cosq_y_gt_x)
@@ -335,11 +350,6 @@ def cu2ho(cu: Tensor) -> Tensor:
     # wherever cu had all zeros, ho should be set to be (0, 0, 0)
     mask_zero = torch.abs(cu).sum(dim=1) == 0
     ho[mask_zero] = 0
-
-    # wherever cu had (0, 0, z) ho should be set to be (0, 0, np.sqrt(6 / np.pi) * z)
-    mask_z = torch.abs(cu[:, :2]).sum(dim=1) == 0
-    ho[mask_z, :2] = 0
-    ho[mask_z, 2] = (6.0 / torch.pi) ** 0.5 * cu[mask_z, 2]
 
     return ho
 
@@ -370,10 +380,10 @@ def ho2cu(ho: Tensor) -> Tensor:
         & (torch.abs(ho[..., 1]) <= -torch.abs(ho[..., 0]))
     )
     mask_pyramids_56 = (
-        (torch.abs(ho[..., 0]) <= torch.abs(ho[..., 1]))
+        (torch.abs(ho[..., 0]) < torch.abs(ho[..., 1]))
         & (torch.abs(ho[..., 2]) <= torch.abs(ho[..., 1]))
     ) | (
-        (torch.abs(ho[..., 0]) <= -torch.abs(ho[..., 1]))
+        (torch.abs(ho[..., 0]) < -torch.abs(ho[..., 1]))
         & (torch.abs(ho[..., 2]) <= -torch.abs(ho[..., 1]))
     )
     mask_pyramids_12 = ~mask_pyramids_34 & ~mask_pyramids_56
@@ -383,14 +393,20 @@ def ho2cu(ho: Tensor) -> Tensor:
     cu[mask_pyramids_34] = torch.roll(ho[mask_pyramids_34], -1, dims=-1)
     cu[mask_pyramids_56] = torch.roll(ho[mask_pyramids_56], 1, dims=-1)
 
+    cu_sign = torch.where(
+        cu < 0,
+        -torch.ones_like(cu),
+        torch.ones_like(cu),
+    )
+
     cu[..., 0] *= (2 * ho_norm / (ho_norm + torch.abs(cu[..., 2]))) ** 0.5
     cu[..., 1] *= (2 * ho_norm / (ho_norm + torch.abs(cu[..., 2]))) ** 0.5
-    cu[..., 2] = (torch.sign(cu[..., 2]) * ho_norm) / ((6 / torch.pi) ** 0.5)
+    cu[..., 2] = (cu_sign[..., 2] * ho_norm) / ((6 / torch.pi) ** 0.5)
 
     qxy = cu[..., 0] ** 2 + cu[..., 1] ** 2
 
-    sx = torch.where(cu[..., 0] != 0, torch.sign(cu[..., 0]), 1)
-    sy = torch.where(cu[..., 1] != 0, torch.sign(cu[..., 1]), 1)
+    sx = cu_sign[..., 0]
+    sy = cu_sign[..., 1]
 
     mask_h2_leq_h1 = torch.abs(cu[..., 1]) <= torch.abs(cu[..., 0])
 
@@ -416,6 +432,19 @@ def ho2cu(ho: Tensor) -> Tensor:
         (h2_top_h1_bot**2 + torch.abs(h1_top_h2_bot) * sq2xy) / (2**0.5) / qxy
     )
 
+    # replace nans resultant from 0/0 for point (+/-1, 0, 0)
+    q_new = torch.where(
+        torch.isnan(q_new),
+        0.0,
+        q_new,
+    )
+    # replace nans resultant from 0/0 for point (+/-1, 0, 0)
+    arccos = torch.where(
+        torch.isnan(arccos),
+        0.0,
+        arccos,
+    )
+
     t1_inv = torch.where(
         mask_h2_leq_h1,
         q_new * sx,
@@ -436,7 +465,8 @@ def ho2cu(ho: Tensor) -> Tensor:
     cu[mask_pyramids_56] = torch.roll(cu[mask_pyramids_56], -1, dims=-1)
 
     # where the magnitude exceeds the homochoric ball, fill nan
-    error_mask = ho_norm > (3 * torch.pi / 4) ** (1 / 3)
+    # small epsilon because homochoric coordinates are polyfit
+    error_mask = ho_norm > ((3 * torch.pi / 4) ** (1 / 3) + 1e-6)
     cu[error_mask] = torch.nan
 
     # mask off where the magnitude is zero
@@ -516,12 +546,17 @@ def ho2ax(ho: Tensor) -> Tensor:
 
     ho_norm_sq = torch.sum(ho**2, dim=-1, keepdim=True)
 
-    s = torch.sum(
-        fit_parameters
-        * ho_norm_sq
-        ** torch.arange(len(fit_parameters), dtype=ho.dtype, device=ho.device),
-        dim=-1,
-    )
+    # s = torch.sum(
+    #     fit_parameters
+    #     * ho_norm_sq
+    #     ** torch.arange(len(fit_parameters), dtype=ho.dtype, device=ho.device),
+    #     dim=-1,
+    # )
+
+    # makes out of memory error doing all at once
+    s = torch.zeros_like(ho_norm_sq[..., 0])
+    for i in range(len(fit_parameters)):
+        s += fit_parameters[i] * ho_norm_sq[..., 0]**i
 
     ax = torch.empty(ho.shape[:-1] + (4,), dtype=ho.dtype, device=ho.device)
 
@@ -752,7 +787,7 @@ def bu2qu(bu: Tensor) -> Tensor:
     qu[..., 3] = -c * torch.sin(sigma)
 
     # correct for negative real part of quaternion
-    return qu * torch.sign(qu[..., 0:1])
+    return qu * torch.where(qu[..., 0] < 0, -1, 1).unsqueeze(-1)
 
 
 @torch.jit.script
@@ -808,159 +843,6 @@ def qu2om(qu: Tensor) -> Tensor:
     matrix[..., 2, 2] = q_bar + 2 * qu[..., 3] ** 2
 
     return matrix
-
-
-@torch.jit.script
-def _axis_angle_rotation(axis: str, angle: Tensor) -> Tensor:
-    """
-    Return the rotation matrices for one of the rotations about an axis
-    of which Euler angles describe, for each value of the angle given.
-
-    Args:
-        axis: Axis label "X" or "Y or "Z".
-        angle: any shape tensor of Euler angles in radians
-
-    Returns:
-        Rotation matrices as tensor of shape (..., 3, 3).
-    """
-
-    cos = torch.cos(angle)
-    sin = torch.sin(angle)
-    one = torch.ones_like(angle)
-    zero = torch.zeros_like(angle)
-
-    if axis == "X":
-        R_flat = (one, zero, zero, zero, cos, -sin, zero, sin, cos)
-    elif axis == "Y":
-        R_flat = (cos, zero, sin, zero, one, zero, -sin, zero, cos)
-    elif axis == "Z":
-        R_flat = (cos, -sin, zero, sin, cos, zero, zero, zero, one)
-    else:
-        raise ValueError("letter must be either X, Y or Z.")
-
-    return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
-
-
-@torch.jit.script
-def eu2om(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to rotation matrices.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Rotation matrices as tensor of shape (..., 3, 3).
-    """
-    if euler_angles.dim() == 0 or euler_angles.shape[-1] != 3:
-        raise ValueError("Invalid input euler angles.")
-    if len(convention) != 3:
-        raise ValueError("Convention must have 3 letters.")
-    if convention[1] in (convention[0], convention[2]):
-        raise ValueError(f"Invalid convention {convention}.")
-    for letter in convention:
-        if letter not in ("X", "Y", "Z"):
-            raise ValueError(f"Invalid letter {letter} in convention string.")
-    matrices = [
-        _axis_angle_rotation(c, e)
-        for c, e in zip(convention, torch.unbind(euler_angles, -1))
-    ]
-    # return functools.reduce(torch.matmul, matrices)
-    return torch.matmul(torch.matmul(matrices[0], matrices[1]), matrices[2])
-
-
-@torch.jit.script
-def _angle_from_tan(
-    axis: str, other_axis: str, data, horizontal: bool, tait_bryan: bool
-) -> Tensor:
-    """
-    Extract the first or third Euler angle from the two members of
-    the matrix which are positive constant times its sine and cosine.
-
-    Args:
-        axis: Axis label "X" or "Y or "Z" for the angle we are finding.
-        other_axis: Axis label "X" or "Y or "Z" for the middle axis in the
-            convention.
-        data: Rotation matrices as tensor of shape (..., 3, 3).
-        horizontal: Whether we are looking for the angle for the third axis,
-            which means the relevant entries are in the same row of the
-            rotation matrix. If not, they are in the same column.
-        tait_bryan: Whether the first and third axes in the convention differ.
-
-    Returns:
-        Euler Angles in radians for each matrix in data as a tensor
-        of shape (...).
-    """
-
-    i1, i2 = {"X": (2, 1), "Y": (0, 2), "Z": (1, 0)}[axis]
-    if horizontal:
-        i2, i1 = i1, i2
-    even = (axis + other_axis) in ["XY", "YZ", "ZX"]
-    if horizontal == even:
-        return torch.atan2(data[..., i1], data[..., i2])
-    if tait_bryan:
-        return torch.atan2(-data[..., i2], data[..., i1])
-    return torch.atan2(data[..., i2], -data[..., i1])
-
-
-@torch.jit.script
-def _index_from_letter(letter: str) -> int:
-    if letter == "X":
-        return 0
-    if letter == "Y":
-        return 1
-    if letter == "Z":
-        return 2
-    raise ValueError("letter must be either X, Y or Z.")
-
-
-@torch.jit.script
-def om2eu(matrix: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as rotation matrices to Euler angles in radians.
-
-    Args:
-        matrix: Rotation matrices as tensor of shape (..., 3, 3).
-        convention: Convention string of three uppercase letters.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-
-    Raises:
-        ValueError: If the convention is invalid or the matrix is not a
-            rotation matrix shape (..., 3, 3).
-    """
-    if len(convention) != 3:
-        raise ValueError("Convention must have 3 letters.")
-    if convention[1] in (convention[0], convention[2]):
-        raise ValueError(f"Invalid convention {convention}.")
-    for letter in convention:
-        if letter not in ("X", "Y", "Z"):
-            raise ValueError(f"Invalid letter {letter} in convention string.")
-    if matrix.size(-1) != 3 or matrix.size(-2) != 3:
-        raise ValueError(f"Invalid rotation matrix shape {matrix.shape}.")
-    i0 = _index_from_letter(convention[0])
-    i2 = _index_from_letter(convention[2])
-    tait_bryan = i0 != i2
-    if tait_bryan:
-        central_angle = torch.asin(
-            matrix[..., i0, i2] * (-1.0 if i0 - i2 in [-1, 2] else 1.0)
-        )
-    else:
-        central_angle = torch.acos(matrix[..., i0, i0])
-
-    o = (
-        _angle_from_tan(
-            convention[0], convention[1], matrix[..., i2], False, tait_bryan
-        ),
-        central_angle,
-        _angle_from_tan(
-            convention[2], convention[1], matrix[..., i0, :], True, tait_bryan
-        ),
-    )
-    return torch.stack(o, -1)
 
 
 @torch.jit.script
@@ -1102,22 +984,6 @@ def ax2ho(ax: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def ax2eu(ax: Tensor, convention: str) -> Tensor:
-    """
-    Converts axis-angle representation to Euler angles in radians.
-
-    Args:
-        ax: Axis-angle representation as tensor of shape (..., 4).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-    """
-    return om2eu(ax2om(ax), convention)
-
-
-@torch.jit.script
 def ro2qu(ro: Tensor) -> Tensor:
     """
     Converts Rodrigues-Frank vector representation to quaternions.
@@ -1171,22 +1037,6 @@ def ro2ho(ro: Tensor) -> Tensor:
         Homochoric vectors as tensor of shape (..., 3).
     """
     return ax2ho(ro2ax(ro))
-
-
-@torch.jit.script
-def ro2eu(ro: Tensor, convention: str) -> Tensor:
-    """
-    Converts Rodrigues-Frank vector representation to Euler angles in radians.
-
-    Args:
-        ro: Rodrigues-Frank vector representation as tensor of shape (..., 4).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-    """
-    return om2eu(ro2om(ro), convention)
 
 
 @torch.jit.script
@@ -1246,22 +1096,6 @@ def cu2ro(cubochoric_vectors: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def cu2eu(cubochoric_vectors: Tensor, convention: str) -> Tensor:
-    """
-    Converts cubochoric vector representation to Euler angles in radians.
-
-    Args:
-        cubochoric_vectors: Cubochoric vectors as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-    """
-    return om2eu(cu2om(cubochoric_vectors), convention)
-
-
-@torch.jit.script
 def ho2qu(homochoric_vectors: Tensor) -> Tensor:
     """
     Converts homochoric vector representation to quaternions.
@@ -1304,150 +1138,6 @@ def ho2ro(homochoric_vectors: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def ho2eu(homochoric_vectors: Tensor, convention: str) -> Tensor:
-    """
-    Converts homochoric vector representation to Euler angles in radians.
-
-    Args:
-        homochoric_vectors: Homochoric vectors as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-    """
-    return om2eu(ho2om(homochoric_vectors), convention)
-
-
-@torch.jit.script
-def eu2ax(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to axis-angle representation.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Axis-angle representation as tensor of shape (..., 4).
-    """
-    return om2ax(eu2om(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2qu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to quaternions.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        quaternions with real part first, as tensor of shape (..., 4).
-    """
-    return om2qu(eu2om(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2ro(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to Rodrigues-Frank vector representation.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Rodrigues-Frank vector representation as tensor of shape (..., 4).
-    """
-    return ax2ro(eu2ax(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to cubochoric vectors.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Cubochoric vectors as tensor of shape (..., 3).
-    """
-    return ax2cu(eu2ax(euler_angles, convention))
-
-
-@torch.jit.script
-def qu2eu(quaternions: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as quaternions to Euler angles in radians.
-
-    Args:
-        quaternions: quaternions with real part first,
-            as tensor of shape (..., 4).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Euler angles in radians as tensor of shape (..., 3).
-    """
-    return om2eu(qu2om(quaternions), convention)
-
-
-@torch.jit.script
-def eu2qu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to quaternions.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        quaternions with real part first, as tensor of shape (..., 4).
-    """
-    return om2qu(eu2om(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to cubochoric vectors.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Cubochoric vectors as tensor of shape (..., 3).
-    """
-    return qu2cu(eu2qu(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2ho(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to homochoric vectors.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-    Returns:
-        Homochoric vectors as tensor of shape (..., 3).
-    """
-    return qu2ho(eu2qu(euler_angles, convention))
-
-
-@torch.jit.script
 def om2ro(matrix: Tensor) -> Tensor:
     """
     Converts rotation matrices to Rodrigues-Frank vector representation.
@@ -1473,3 +1163,143 @@ def om2cu(matrix: Tensor) -> Tensor:
         Cubochoric vector representation as tensor of shape (..., 3).
     """
     return qu2cu(om2qu(matrix))
+
+
+@torch.jit.script
+def bu2om(bunge_angles: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to rotation matrices.
+
+    Args:
+        bunge_angles: Bunge angles in radians as tensor of shape (..., 3).
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    return qu2om(bu2qu(bunge_angles))
+
+
+@torch.jit.script
+def bu2ax(bunge_angles: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to axis-angle representation.
+
+    Args:
+        bunge_angles: Bunge angles in radians as tensor of shape (..., 3).
+
+    Returns:
+        Axis-angle representation as tensor of shape (..., 4).
+    """
+    return qu2ax(bu2qu(bunge_angles))
+
+
+@torch.jit.script
+def bu2ro(bunge_angles: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to Rodrigues-Frank vector representation.
+
+    Args:
+        bunge_angles: Bunge angles in radians as tensor of shape (..., 3).
+
+    Returns:
+        Rodrigues-Frank vector representation as tensor of shape (..., 4).
+    """
+    return qu2ro(bu2qu(bunge_angles))
+
+
+@torch.jit.script
+def bu2cu(bunge_angles: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to cubochoric vector representation.
+
+    Args:
+        bunge_angles: Bunge angles in radians as tensor of shape (..., 3).
+
+    Returns:
+        Cubochoric vector representation as tensor of shape (..., 3).
+    """
+    return qu2cu(bu2qu(bunge_angles))
+
+
+@torch.jit.script
+def bu2ho(bunge_angles: Tensor) -> Tensor:
+    """
+    Convert rotations given as Bunge angles (ZXZ Euler angles) to homochoric vector representation.
+
+    Args:
+        bunge_angles: Bunge angles in radians as tensor of shape (..., 3).
+
+    Returns:
+        Homochoric vector representation as tensor of shape (..., 3).
+    """
+    return qu2ho(bu2qu(bunge_angles))
+
+
+@torch.jit.script
+def om2bu(matrix: Tensor) -> Tensor:
+    """
+    Convert rotations given as rotation matrices to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        matrix: Rotation matrices as tensor of shape (..., 3, 3).
+
+    Returns:
+        Bunge angles in radians as tensor of shape (..., 3).
+    """
+    return qu2bu(om2qu(matrix))
+
+
+@torch.jit.script
+def ax2bu(axis_angle: Tensor) -> Tensor:
+    """
+    Convert rotations given as axis-angle representation to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        axis_angle: Axis-angle representation as tensor of shape (..., 4).
+
+    Returns:
+        Bunge angles in radians as tensor of shape (..., 3).
+    """
+    return qu2bu(ax2qu(axis_angle))
+
+
+@torch.jit.script
+def ro2bu(rodrigues_frank: Tensor) -> Tensor:
+    """
+    Convert rotations given as Rodrigues-Frank vector representation to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        rodrigues_frank: Rodrigues-Frank vector representation as tensor of shape (..., 4).
+
+    Returns:
+        Bunge angles in radians as tensor of shape (..., 3).
+    """
+    return qu2bu(ro2qu(rodrigues_frank))
+
+
+@torch.jit.script
+def cu2bu(cubochoric_vectors: Tensor) -> Tensor:
+    """
+    Convert rotations given as cubochoric vectors to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        cubochoric_vectors: Cubochoric vectors as tensor of shape (..., 3).
+
+    Returns:
+        Bunge angles in radians as tensor of shape (..., 3).
+    """
+    return qu2bu(cu2qu(cubochoric_vectors))
+
+
+@torch.jit.script
+def ho2bu(homochoric_vectors: Tensor) -> Tensor:
+    """
+    Convert rotations given as homochoric vectors to Bunge angles (ZXZ Euler angles).
+
+    Args:
+        homochoric_vectors: Homochoric vectors as tensor of shape (..., 3).
+
+    Returns:
+        Bunge angles in radians as tensor of shape (..., 3).
+    """
+    return qu2bu(ho2qu(homochoric_vectors))
