@@ -4,9 +4,11 @@ PyTorch implementation of 2D contrast limited adaptive histogram equalization.
 Heavily inspired by Kornia's CLAHE implementation:
 https://github.com/kornia/kornia
 
+Main difference is that I use scatter_ instead of a for-loop to calculate the histograms.
+
 """
 
-from typing import Sequence, Tuple
+from typing import Tuple
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -18,10 +20,10 @@ def clahe_grayscale(
     x: torch.Tensor,
     clip_limit: float = 40.0,
     n_bins: int = 64,
-    grid_shape: Tuple[int, int] = (8, 8),
+    grid_shape: Tuple[int, int] = (4, 4),
 ) -> Tensor:
     """
-    Calculates the tile CDFs for CLAHE on a 2D tensor.
+    CLAHE on batches of 2D tensor.
 
     Args:
         x (Tensor): Input grayscale images of shape (B, 1, H, W).
@@ -119,7 +121,7 @@ def clahe_grayscale(
     x = F.grid_sample(
         cdfs[:, None, :, :, :],  # (B, 1, n_bins, GH, GW)
         coords_into_cdfs,  # (B, 1, H, W, 3)
-        mode="bilinear",
+        mode="nearest",
         padding_mode="border",
         align_corners=False,
     )

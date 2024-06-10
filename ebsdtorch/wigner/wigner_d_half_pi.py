@@ -597,7 +597,7 @@ def access_d_beta_half_pi(
     return quarter_table[j, k_ind_abs, m_ind_abs] * prefactor
 
 
-# @torch.jit.script
+# @torch.jit.script... can't jit sparse coo tensor yet
 def wigner_d_SHT_weights_half_pi(
     L: int,
     device: torch.device = torch.device("cpu"),

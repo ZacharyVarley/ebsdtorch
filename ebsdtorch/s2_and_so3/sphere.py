@@ -129,7 +129,8 @@ def rosca_lambert_side_by_side(pts: Tensor) -> Tensor:
     out = torch.stack((simpler_term, arctan_term), dim=-1)
     out = torch.where(cond[..., None], out, out.flip(-1))
     # halve the x index for all points then subtract 0.5 to move to [-1, 0]
-    # then add 1 if z is negative to move to [0, 1]
+    # then add 1 to the j coordinate if z is negative to move to [0, 1]
+    # note that torch's grid_sample has flipped coordinates from ij indexing
     out[..., 0] = (out[..., 0] / 2.0) - 0.5 + torch.where(z < 0, 1.0, 0)
     return out
 

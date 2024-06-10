@@ -1,25 +1,12 @@
 """
 This module implements non-local pattern averaging (NLPAR) to denoise EBSD
-patterns by averaging over a local kernel.
+patterns by averaging similar patterns with a square kernel.
 
 The NLPAR algorithm is based on the following paper:
 
 Brewick, Patrick T., Stuart I. Wright, and David J. Rowenhorst. "NLPAR:
 Non-local smoothing for enhanced EBSD pattern indexing." Ultramicroscopy 200
 (2019): 50-61.
-
-The steps to NLPAR:
-
-INPUT: SCAN_H x SCAN_W x PAT_H x PAT_W tensor of EBSD patterns
-
-1) For all patterns look at the 8 sourrounding patterns in a 3x3 window
-Noise estimate: sigma = sqrt(min(distances(central_pat, 8_neighbors)) / 2*n_pixels_per_pat)
-2) Compute the normalized distances to each pattern in the neighborhood:
-d_bar = (sum(pairwise pixel distances) - 2 * n_pixels_per_pat * sigma^2) / (sqrt(2*n_pixels_per_pat) * 2 * sigma^2)
-dbar = sum(pairwise pixel distances) / (sqrt(2*n_pixels_per_pat) * 2 * sigma^2) - (n_pixels_per_pat^0.5 / (2^0.5))
-3) Compute the weights for each pattern in the neighborhood:
-softmax within the neighborhood of the zero-clamped normalized distances
-4) Compute the denoised pattern as the weighted average of the neighborhood patterns
 
 """
 
@@ -41,7 +28,7 @@ def nlpar(
     Non-local pattern averaging (NLPAR) denoising algorithm.
 
     Args:
-        data (torch.Tensor): The EBSD pattern data tensor.
+        data (Tensor): The EBSD pattern data tensor.
         k_rad (int): The radius of the kernel.
         coeff (float): higher -> original pattern has more weight
         coeff_fit_tol (float): tolerance (Newton's method) to hit coeff
@@ -154,6 +141,7 @@ def nlpar(
     # f' = -2 * exp(w[0]/x^2) * (sum(w[0] * exp(w[i]/x^2)) - sum(w[i] * exp(w[i]/x^2))) / x^3 * sum(exp(w[i]/x^2))^2
     # Newton's method:
     # x = x - f / f'
+    # The current implementation uses Nelder-Mead optimization to find the coefficient
     guess_coeff = 1.0
     nn_weights = weights[:, :, :9]
     for _ in range(10):
@@ -163,7 +151,7 @@ def nlpar(
             torch.mean(torch.softmax(nn_weights / guess_coeff_sq, dim=-1)[:, :, 0])
             - coeff
         )
-        grad = (
+        grad = torch.mean(
             -2
             * torch.exp(nn_weights[:, :, 0] / guess_coeff_sq)
             * (
@@ -178,10 +166,8 @@ def nlpar(
                 * torch.sum(torch.exp(nn_weights / guess_coeff_sq), dim=-1) ** 2
             )
         )
-        obj_mean = torch.mean(obj)
-        grad_mean = torch.mean(grad)
-        guess_coeff -= obj_mean / grad_mean
-        if torch.abs(obj_mean) < coeff_fit_tol:
+        guess_coeff -= obj / grad
+        if torch.abs(obj) < coeff_fit_tol:
             break
 
     # apply the computed coefficient to the weights

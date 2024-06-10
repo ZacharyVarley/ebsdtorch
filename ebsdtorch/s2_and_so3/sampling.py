@@ -133,7 +133,11 @@ def so3_cu_rand(n: int, device: torch.device) -> Tensor:
 
 
 @torch.jit.script
-def so3_uniform_quat(n: int, device: torch.device) -> Tensor:
+def so3_uniform_quat(
+    n: int,
+    device: torch.device,
+    dtype: torch.dtype = torch.float32,
+) -> Tensor:
     """
     Generate uniformly distributed elements of SO(3) as quaternions. This
     routine includes both quaternion hemispheres and will return quaternions
@@ -157,9 +161,9 @@ def so3_uniform_quat(n: int, device: torch.device) -> Tensor:
     """
 
     # h = ( sqrt(1-u) sin(2πv), sqrt(1-u) cos(2πv), sqrt(u) sin(2πw), sqrt(u) cos(2πw))
-    u = torch.rand(n, device=device)
-    v = torch.rand(n, device=device)
-    w = torch.rand(n, device=device)
+    u = torch.rand(n, device=device, dtype=dtype)
+    v = torch.rand(n, device=device, dtype=dtype)
+    w = torch.rand(n, device=device, dtype=dtype)
     h = torch.stack(
         [
             torch.sqrt(1 - u) * torch.sin(2 * torch.pi * v),

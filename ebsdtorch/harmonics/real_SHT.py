@@ -64,7 +64,6 @@ def grid_DriscollHealy(
     return torch.stack([theta, phi], dim=-1)
 
 
-# Normalization coeffs for m-th frequency (C_m)
 @torch.jit.script
 def normCm(
     B: int,
@@ -77,11 +76,6 @@ def normCm(
     Returns: (Tensor): shape (2*bandlimit-1) with normalization coefficients.
 
     """
-    # Cm = torch.empty(2 * B - 1, dtype=torch.double)
-    # for m in range(-(B - 1), B):
-    #     Cm[m + (B - 1)] = np.power(-1.0, m) * np.sqrt(2.0 * PI)
-
-    # vectorized version:
     m = torch.arange(-(B - 1), B, dtype=torch.double, device=device)
     Cm = torch.pow(-1.0, m) * (2.0 * torch.pi) ** 0.5
     return Cm
@@ -93,17 +87,6 @@ def dltWeightsDH(
     B: int,
     device: torch.device = torch.device("cpu"),
 ) -> Tensor:
-    # W = torch.empty(2 * B, dtype=torch.double)
-    # for k in range(0, 2 * B):
-    #     C = (2.0 / B) * np.sin(PI * (2 * k + 1) / (4.0 * B))
-    #     wk = 0.0
-    #     for p in range(0, B):
-    #         wk += (1.0 / (2 * p + 1)) * np.sin(
-    #             (2 * k + 1) * (2 * p + 1) * PI / (4.0 * B)
-    #         )
-    #     W[k] = C * wk
-
-    # vectorized version:
     k = torch.arange(0, 2 * B, dtype=torch.double, device=device)
     C = (2.0 / B) * torch.sin(torch.pi * (2 * k + 1) / (4.0 * B))
     p = torch.arange(0, B, dtype=torch.double, device=device).repeat(2 * B, 1)
@@ -122,14 +105,6 @@ def idctMatrix(
     N: int,
     device: torch.device = torch.device("cpu"),
 ) -> Tensor:
-    # DI = torch.empty(N, N).double().fill_(0)
-    # for k in range(0, N):
-    #     for n in range(0, N):
-    #         DI[k, n] = np.cos(PI * n * (k + 0.5) / N)
-    # DI[:, 0] = DI[:, 0] * np.sqrt(1.0 / N)
-    # DI[:, 1:] = DI[:, 1:] * np.sqrt(2.0 / N)
-
-    # vectorized version:
     kk, nn = torch.meshgrid(
         torch.arange(0, N, dtype=torch.double, device=device),
         torch.arange(0, N, dtype=torch.double, device=device),
@@ -147,16 +122,6 @@ def idstMatrix(
     N: int,
     device: torch.device = torch.device("cpu"),
 ) -> Tensor:
-    # DI = torch.empty(N, N, dtype=torch.double).fill_(0)
-    # for k in range(0, N):
-    #     for n in range(0, N):
-    #         if n == (N - 1):
-    #             DI[k, n] = np.power(-1.0, k)
-    #         else:
-    #             DI[k, n] = np.sin(PI * (n + 1) * (k + 0.5) / N)
-    # DI[:, N - 1] = DI[:, N - 1] * np.sqrt(1.0 / N)
-    # DI[:, : (N - 1)] = DI[:, : (N - 1)] * np.sqrt(2.0 / N)
-
     # vectorized version:
     kk, nn = torch.meshgrid(
         torch.arange(0, N, dtype=torch.double, device=device),
@@ -276,7 +241,6 @@ class IDLT(nn.Module):
         else:
             sInd = torch.arange(1, 2 * L - 1, 2)
             cInd = torch.arange(0, 2 * L - 1, 2)
-
         self.register_buffer("cInd", cInd)
         self.register_buffer("sInd", sInd)
         self.register_buffer("iCm", torch.reciprocal(normCm(L)))
@@ -301,11 +265,9 @@ class IDLT(nn.Module):
             ),
             (b, 2 * L - 1, 2 * L),
         )
-
         # Apply DCT + DST to even + odd indexed m
         psiHat[:, self.cInd, :] = self.dct(psiHat[:, self.cInd, :])
         psiHat[:, self.sInd, :] = self.dst(psiHat[:, self.sInd, :])
-
         # f: b x theta x phi
         return torch.mul(self.iCm[None, :, None], psiHat)
 
@@ -348,19 +310,15 @@ class FTSHT(nn.Module):
         psiHat = torch.fft.fftshift(torch.fft.fft(psi, dim=1, norm="forward"), dim=1)[
             :, 1:, :
         ]
-
         ## Convert to real representation
         psiHat = torch.reshape(
             torch.permute(torch.view_as_real(psiHat), (0, 3, 1, 2)),
             (2 * b, 2 * L - 1, 2 * L),
         )
-
         # Forward DLT
         Psi = self.FDL(psiHat)
-
         # Convert back to complex and return
         # Psi: b x M x L (complex)
-
         return torch.view_as_complex(
             torch.permute(torch.reshape(Psi, (b, 2, 2 * L - 1, L)), (0, 2, 3, 1))
         )

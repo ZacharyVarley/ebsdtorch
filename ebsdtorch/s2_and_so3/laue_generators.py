@@ -35,7 +35,6 @@ def get_laue_mult(laue_group: int) -> int:
         integer containing the multiplicity of the Laue group
 
     """
-
     LAUE_MULTS = [
         2,  #   1 - Triclinic
         4,  #   2 - Monoclinic
@@ -49,7 +48,6 @@ def get_laue_mult(laue_group: int) -> int:
         24,  # 10 - Cubic low
         48,  # 11 - Cubic high
     ]
-
     return LAUE_MULTS[laue_group - 1]
 
 
@@ -76,7 +74,6 @@ def laue_elements(laue_id: int) -> Tensor:
 
     Returns:
         torch tensor of shape (cardinality, 4) containing the elements of the
-
 
     Notes:
 

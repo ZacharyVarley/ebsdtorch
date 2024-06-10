@@ -30,7 +30,7 @@ from typing import Tuple
 import torch
 from torch.nn import Linear, Module
 from torch import Tensor
-from torch.quantization import quantize_dynamic
+from torch.ao.quantization import quantize_dynamic
 
 
 class LinearLayer(Module):
@@ -112,7 +112,7 @@ class ChunkedKNN:
         match_device: torch.device,
         distance_metric: str = "angular",
         match_dtype: torch.dtype = torch.float16,
-        quantized_if_x86: bool = True,
+        quantized_via_ao: bool = True,
     ):
         """
         Initialize the ChunkedKNN indexer to do batched k-nearest neighbors search.
@@ -131,14 +131,21 @@ class ChunkedKNN:
         self.topk = topk
         self.match_device = match_device
         self.distance_metric = distance_metric
+
+        if (
+            quantized_via_ao
+            and match_dtype != torch.float32
+            and match_device.type == "cpu"
+        ):
+            print(
+                "CPU Quantization requires float32 data type. Forcing float32 match_dtype."
+            )
+            match_dtype = torch.float32
+
         self.match_dtype = match_dtype
-        self.quantized = quantized_if_x86
+        self.quantized = quantized_via_ao
 
         self.big_better = self.distance_metric == "angular"
-        self.data_chunk = None
-        self.data_quantized = None
-        self.data_start = None
-        self.query_start = 0
         ind_dtype = torch.int64 if self.data_size < 2**31 else torch.int32
         self.knn_indices = torch.empty(
             (self.query_size, self.topk), device=self.match_device, dtype=ind_dtype
@@ -150,28 +157,28 @@ class ChunkedKNN:
             dtype=self.match_dtype,
         )
 
+        self.prepared_data = None
+        self.data_start = 0
+
     def set_data_chunk(self, data_chunk: Tensor):
         """
-        Set the current data chunk.
+        Set the current data chunk. Shape (N, D).
 
         Args:
             data_chunk (Tensor): The data chunk to set.
         """
         data_chunk = data_chunk.to(self.match_dtype).to(self.match_device)
-        if self.data_chunk is None:
-            self.data_start = 0
-        else:
+
+        if self.prepared_data is not None:
             # Update data start index by size of the previous chunk
             # that is about to be discarded
-            self.data_start += self.data_chunk.shape[0]
+            self.data_start += data_chunk.shape[0]
 
         # Quantize the data if needed
         if self.quantized and self.match_device.type == "cpu":
-            self.data_quantized = quant_model_data(data_chunk)
-            self.data_chunk = None
+            self.prepared_data = quant_model_data(data_chunk)
         else:
-            self.data_quantized = None
-            self.data_chunk = data_chunk
+            self.prepared_data = data_chunk
 
     def query_all(self, query: Tensor):
         """
@@ -181,16 +188,19 @@ class ChunkedKNN:
             query (Tensor): The queries to search.
         """
         # throw an error if the data chunk is not set
-        if self.data_chunk is None and self.data_quantized is None:
+        if self.prepared_data is None:
             raise ValueError("Data chunk is not set.")
 
-        if self.data_quantized is not None:
+        # send query to match device and dtype
+        query = query.to(self.match_dtype).to(self.match_device)
+
+        if self.quantized and self.match_device.type == "cpu":
             knn_dists_chunk, knn_inds_chunk = topk_quantized_data(
-                query, self.data_quantized, self.topk
+                query, self.prepared_data, self.topk
             )
         else:
             knn_dists_chunk, knn_inds_chunk = knn_batch(
-                self.data_chunk, query, self.topk, self.distance_metric
+                self.prepared_data, query, self.topk, self.distance_metric
             )
 
         # chunk indices -> global indices
@@ -218,20 +228,21 @@ class ChunkedKNN:
         """
 
         # throw an error if the data chunk is not set
-        if self.data_chunk is None and self.data_quantized is None:
+        if self.prepared_data is None:
             raise ValueError("Data chunk is not set.")
 
         query_end = query_start + query_chunk.shape[0]
         query_chunk = query_chunk.to(self.match_dtype).to(self.match_device)
 
-        if self.data_quantized is not None:
+        if self.quantized and self.match_device.type == "cpu":
             knn_distances_chunk, knn_indices_chunk = topk_quantized_data(
-                query_chunk, self.data_quantized, self.topk
+                query_chunk, self.prepared_data, self.topk
             )
         else:
             knn_distances_chunk, knn_indices_chunk = knn_batch(
-                self.data_chunk, query_chunk, self.topk, self.distance_metric
+                self.prepared_data, query_chunk, self.topk, self.distance_metric
             )
+
         knn_indices_chunk += self.data_start
 
         # Merge the old and new top-k indices and distances

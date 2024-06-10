@@ -383,7 +383,7 @@ def se3_exp_map_om(vecs: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def se3_exp_map(vecs: Tensor) -> Tuple[Tensor, Tensor]:
+def se3_exp_map_split(vecs: Tensor) -> Tuple[Tensor, Tensor]:
     """
     Compute the SE3 matrix from omega and tvec.
 
