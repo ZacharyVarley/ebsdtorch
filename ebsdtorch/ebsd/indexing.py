@@ -1,7 +1,7 @@
 from torch import Tensor
 import torch
-from ebsdtorch.ebsd.ebsd_master_patterns import MasterPattern
-from ebsdtorch.ebsd.ebsd_experiment_pats import ExperimentPatterns
+from ebsdtorch.ebsd.master_pattern import MasterPattern
+from ebsdtorch.ebsd.experiment_pats import ExperimentPatterns
 from ebsdtorch.ebsd.geometry import EBSDGeometry
 from typing import Optional, Union, List
 from ebsdtorch.s2_and_so3.laue_fz_ori import sample_ori_fz_laue_angle
@@ -66,6 +66,7 @@ def dictionary_index_orientations(
             laue_id=mp.laue_group,
             angular_resolution_deg=dictionary_resolution_degrees,
             device=mp.master_pattern.device,
+            permute=True,
         )
 
         # make an object to do the pattern comparisons
@@ -79,7 +80,7 @@ def dictionary_index_orientations(
             quantized_via_ao=quantized_if_x86,
         )
 
-        # get a helper function to sync devices
+        # get a helper function to sync devices so progress bar correctly updates
         if experiment_patterns.patterns.device.type == "cuda":
             sync = torch.cuda.synchronize
         elif experiment_patterns.patterns.device.type == "mps":
@@ -110,8 +111,8 @@ def dictionary_index_orientations(
             prefix=f"INDX MP {i+1:01d}/{len(master_patterns):01d} ",
         )
 
-        # for ori_batch in list(torch.split(ori_tensor, dictionary_batch_size)):
         for ori_batch in pb:
+            # for ori_batch in pb:
             # use orientations to rotate the rays to detector pixel positions
             # (n_ori, 4) -> (n_ori, 1, 4) and (H*W, 3) -> (1, H*W, 3) for broadcasting
             batch_rotated_coords = qu_apply(
@@ -144,6 +145,7 @@ def dictionary_index_orientations(
 
             # set the data for the KNN object
             knn.set_data_chunk(simulated_patterns)
+
             if experiment_chunk_size > experiment_patterns.n_patterns:
                 exp_pats = experiment_patterns.get_patterns(
                     torch.arange(experiment_patterns.n_patterns),
@@ -493,6 +495,7 @@ def pca_dictionary_index_orientations(
 #     laue_group=11,
 # ).to(device)
 # mp.normalize(norm_type="minmax")
+# # mp.apply_clahe()
 
 # # create the experiment patterns object
 # exp_pats = (
@@ -500,22 +503,14 @@ def pca_dictionary_index_orientations(
 #     .to(device)
 #     .to(torch.float32)
 # )
-# coords = torch.stack(
-#     torch.meshgrid(
-#         torch.arange(exp_pats.shape[0]),
-#         torch.arange(exp_pats.shape[1]),
-#         indexing="ij",
-#     ),
-#     dim=-1,
-# )
+
 # exp_pats = ExperimentPatterns(
 #     exp_pats,
-#     spatial_coords=coords,
 # )
 
 # # subtract background and do clahe
 # exp_pats.standard_clean()
-# exp_pats.do_nlpar()
+# # exp_pats.do_nlpar()
 
 # # get radial mask
 # mask = get_radial_mask(
@@ -528,7 +523,7 @@ def pca_dictionary_index_orientations(
 #     mp,
 #     geom,
 #     exp_pats,
-#     dictionary_resolution_degrees=0.85,
+#     dictionary_resolution_degrees=0.5,
 #     dictionary_chunk_size=4096,
 #     signal_mask=mask,
 #     virtual_binning=1,
@@ -549,7 +544,6 @@ def pca_dictionary_index_orientations(
 # #     match_dtype=torch.float16,
 # #     n_pca_components=1200,
 # # )
-
 
 # orientations = exp_pats.get_orientations().cpu().numpy()
 

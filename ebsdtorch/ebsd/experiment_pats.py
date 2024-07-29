@@ -14,7 +14,6 @@ from torch import Tensor
 from torch.nn import Module
 from ebsdtorch.preprocessing.clahe import clahe_grayscale
 from ebsdtorch.preprocessing.nlpar import nlpar
-from ebsdtorch.s2_and_so3.orientations import qu2zh
 
 
 class ExperimentPatterns(Module):
@@ -25,22 +24,12 @@ class ExperimentPatterns(Module):
     Args:
         :patterns (Tensor): Pattern data tensor shaped (SCAN_H, SCAN_W, H, W),
             (N_PATS, H, W), or (H, W).
-        :spatial_coords (Tensor): Spatial coordinates tensor shaped (SCAN_H,
-            SCAN_W, N_Spatial_Dims), (N_PATS, N_Spatial_Dims), or
-            (N_Spatial_Dims,).
-        :consider_rotation (bool): Whether to consider rotations
-        :consider_phases (bool): Whether to consider phases.
-        :consider_strains (bool): Whether to consider strains.
 
     """
 
     def __init__(
         self,
         patterns: Tensor,
-        spatial_coords: Tensor,
-        grad_for_rotation: bool = False,
-        consider_strains: bool = False,
-        grad_for_strains: bool = False,
     ):
         super(ExperimentPatterns, self).__init__()
 
@@ -55,16 +44,8 @@ class ExperimentPatterns(Module):
                 + "(SCAN_H, SCAN_W, H, W), (N_PATS, H, W), or (H, W)"
             )
 
-        # check that the spatial coordinates have the same shape as the patterns
-        # except for the last two dimensions
-        if spatial_coords.shape[:-1] != patterns.shape[:-2]:
-            raise ValueError(
-                f"'patterns' shape {tuple(patterns.shape)}, needs 'spatial_coords' "
-                + f"shape {str(tuple(patterns.shape[:-2]))[:-1]} N_Spatial_Dims)"
-            )
-
         self.pattern_shape = patterns.shape[-2:]
-        self.spatial_shape = spatial_coords.shape[:-1]
+        self.spatial_shape = patterns.shape[:-2] if len(patterns.shape) > 2 else (1, 1)
         self.patterns = patterns.view(-1, *patterns.shape[-2:])
 
         # set number of patterns and pixels
@@ -73,76 +54,117 @@ class ExperimentPatterns(Module):
 
         self.phases = None
         self.orientations = None
-        self.f_matrix = None
-        self.grad_for_strains = grad_for_strains
-        self.consider_strains = consider_strains
+        self.inv_f_matrix = None
 
-    def set_rotations(
+    def set_spatial_coords(
         self,
-        rotations: Optional[Tensor] = None,
+        spatial_coords: Tensor,
+        indices: Optional[Tensor] = None,
     ):
         """
-        Set the rotations for the ExperimentPatterns object.
+        Set the spatial coordinates for the ExperimentPatterns object.
 
         Args:
-            :rotations (Tensor): Rotations tensor shaped (N_PATS, 4) or (1, 4). If
-                None, the rotations are set to the identity.
+            :spatial_coords (Tensor): Spatial coordinates tensor shaped (N_PATS, N_Spatial_Dims).
 
         """
-        if rotations is None:
-            rotations = torch.zeros(
-                self.n_patterns,
-                4,
-                device=self.patterns.device,
+        if indices is None:
+            if spatial_coords.shape[0] != self.n_patterns:
+                raise ValueError(
+                    f"Spatial coordinates must have the same number of patterns as the ExperimentPatterns object. "
+                    + f"Got {spatial_coords.shape[0]} spatial coordinates and {self.n_patterns} patterns."
+                )
+            self.spatial_coords = spatial_coords
+        else:
+            if spatial_coords.shape[0] != indices.shape[0]:
+                raise ValueError(
+                    f"Spatial coordinates must have the same number of patterns as the indices. "
+                    + f"Got {spatial_coords.shape[0]} spatial coordinates and {indices.shape[0]} indices."
+                )
+            self.spatial_coords[indices] = spatial_coords
+
+    def get_spatial_coords(
+        self,
+        indices: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        Retrieve the spatial coordinates for the ExperimentPatterns object.
+
+        Args:
+            :indices (Tensor): Indices of the patterns to retrieve.
+
+        Returns:
+            Tensor: Retrieved spatial coordinates.
+
+        """
+        if self.spatial_coords is None:
+            raise ValueError("Spatial coordinates must be set before retrieving them.")
+        else:
+            if indices is None:
+                return self.spatial_coords
+            return self.spatial_coords[indices]
+
+    def set_orientations(
+        self,
+        orientations: Tensor,
+        indices: Optional[Tensor] = None,
+    ):
+        """
+        Set the orientations for the ExperimentPatterns object.
+
+        Args:
+            :orientations (Tensor): Orientations tensor shaped (N_PATS, 4).
+
+        """
+        # check the shape
+        if len(orientations.shape) != 2:
+            raise ValueError(
+                f"Orientations must be quaternions (N_ORI, 4). Got {orientations.shape}."
             )
-            rotations[:, 0] = 1.0
+        if indices is None:
+            if orientations.shape[0] != self.n_patterns:
+                raise ValueError(
+                    f"Orientations must have the same number of patterns as the ExperimentPatterns object. "
+                    + f"Got {orientations.shape[0]} orientations and {self.n_patterns} patterns."
+                )
+            if orientations.shape[1] != 4:
+                raise ValueError(
+                    f"Orientations must be quaternions (w, x, y, z). Got {orientations.shape[1]}."
+                )
+            self.orientations = orientations
         else:
-            if rotations.shape[0] != self.n_patterns:
+            # check dim of indices
+            if len(indices.shape) != 1:
+                raise ValueError(f"Indices must be (N_ORI,). Got {indices.shape}.")
+            if orientations.shape[0] != indices.shape[0]:
                 raise ValueError(
-                    f"Rotations must have the same number of patterns as the ExperimentPatterns object. "
-                    + f"Got {rotations.shape[0]} rotations and {self.n_patterns} patterns."
+                    f"Orientations must have the same number of patterns as the indices. "
+                    + f"Got {orientations.shape[0]} orientations and {indices.shape[0]} indices."
                 )
-
-            if rotations.shape[1] != 4:
+            if orientations.shape[1] != 4:
                 raise ValueError(
-                    f"Rotations must be quaternions (w, x, y, z). Got {rotations.shape[1]} components."
+                    f"Orientations must be quaternions (w, x, y, z). Got {orientations.shape[1]} components."
                 )
-        self.orientations = rotations
+            self.orientations[indices] = orientations
 
-    def set_rot_grad(
+    def get_orientations(
         self,
-        rot_requires_grad: bool,
-    ):
+        indices: Optional[Tensor] = None,
+    ) -> Tensor:
         """
-        Set the rotations to require gradients or remove requirement. Diffable
-        rotations are stored a Zhou et al 6D vectors with no option to use
-        quaternions because they're strictly better for optimization. The method
-        get_rotations will convert the rotations to quaternions (with
-        differentiable gradients).
+        Retrieve the orientations for the ExperimentPatterns object.
 
-        Args:
-            :rot_requires_grad (bool): Whether the rotations require gradients.
+        Returns:
+            Tensor: Rotations tensor shaped (N_PATS, 4).
 
         """
-        # if rotations are required to have gradients
-        if rot_requires_grad:
-            if self.orientations is not None:
-                if self.orientations.shape[-1] == 4:
-                    self.orientations = torch.nn.Parameter(qu2zh(self.orientations))
-            else:
-                raise ValueError(
-                    "Rotations must be set via indexing or manually before requiring gradients."
-                )
+        if indices is None:
+            ori = self.orientations
         else:
-            if self.orientations is not None:
-                if self.orientations.shape[-1] == 6:
-                    self.orientations = qu2zh(self.orientations)
-            else:
-                raise ValueError(
-                    "Rotations must be set via indexing or manually before removing gradients."
-                )
+            ori = self.orientations[indices]
+        return ori
 
-    def set_deformation_gradient(
+    def set_inv_f_matrix(
         self,
         f_matrix: Optional[Tensor] = None,
     ):
@@ -164,7 +186,7 @@ class ExperimentPatterns(Module):
             f_matrix[:, 0] = 1.0
             f_matrix[:, 4] = 1.0
             f_matrix[:, 8] = 1.0
-            f_matrix = f_matrix.view(self.n_patterns, 3, 3)
+            f_matrix = f_matrix.reshape(self.n_patterns, 3, 3)
         else:
             if f_matrix.shape[0] != self.n_patterns:
                 raise ValueError(
@@ -177,35 +199,26 @@ class ExperimentPatterns(Module):
                 raise ValueError(
                     f"Deformation gradients must be 3x3 matrices. Got {f_matrix.shape[-2:]} components."
                 )
-        self.f_matrix = f_matrix.view(self.n_patterns, 3, 3)
+        self.inv_f_matrix = f_matrix.view(self.n_patterns, 3, 3)
 
-    def set_f_matrix_grad(
+    def get_inv_f_matrix(
         self,
-        grad_for_strains: bool,
-    ):
+        indices: Optional[Tensor] = None,
+    ) -> Tensor:
         """
-        Set the deformation gradient to require gradients or remove requirement.
+        Retrieve the deformation gradient tensor inverse for the ExperimentPatterns object.
 
-        Args:
-            :grad_for_strains (bool): Whether the deformation gradients require gradients.
+        Returns:
+            Tensor: Deformation gradient tensor shaped (N_PATS, 3, 3).
 
         """
-        if grad_for_strains:
-            if self.f_matrix is not None:
-                self.f_matrix = torch.nn.Parameter(self.f_matrix)
-            else:
-                raise ValueError(
-                    "Deformation gradients must be set via indexing or manually before requiring gradients."
-                )
-        else:
-            if self.f_matrix is not None:
-                f_matrix_tmp = self.f_matrix
-                del self.f_matrix
-                self.register_buffer("f_matrix", f_matrix_tmp)
-            else:
-                raise ValueError(
-                    "Deformation gradients must be set via indexing or manually before removing gradients."
-                )
+        if self.inv_f_matrix is None:
+            raise ValueError(
+                "Deformation gradients must be set before retrieving them."
+            )
+        if indices is None:
+            return self.inv_f_matrix
+        return self.inv_f_matrix[indices]
 
     def subtract_overall_background(
         self,
@@ -222,7 +235,7 @@ class ExperimentPatterns(Module):
         self,
         clip_limit: float = 40.0,
         tile_grid_size: int = 4,
-        n_bins: int = 256,
+        n_bins: int = 64,
     ):
         """
         Contrast enhance the patterns using CLAHE.
@@ -279,7 +292,7 @@ class ExperimentPatterns(Module):
         self.subtract_overall_background()
         self.normalize_per_pattern(norm_type="minmax")
         self.contrast_enhance_clahe()
-        self.normalize_per_pattern(norm_type="zeromean")
+        self.normalize_per_pattern(norm_type="minmax")
 
     def do_nlpar(self, k_rad: int = 3, coeff: float = 0.375):
         """
@@ -350,56 +363,6 @@ class ExperimentPatterns(Module):
             torch.nonzero(self.phases == i, as_tuple=False).squeeze()
             for i in range(self.phases.max().item() + 1)
         ]
-
-    def get_orientations(
-        self,
-        indices: Optional[Tensor] = None,
-    ) -> Tensor:
-        """
-        Retrieve the orientations for the ExperimentPatterns object.
-
-        Returns:
-            Tensor: Rotations tensor shaped (N_PATS, 4).
-
-        """
-        if indices is None:
-            return self.orientations
-        return self.orientations[indices]
-
-    def set_orientations(
-        self,
-        orientations: Tensor,
-        indices: Optional[Tensor] = None,
-    ):
-        """
-        Set the orientations for the ExperimentPatterns object.
-
-        Args:
-            :orientations (Tensor): Orientations tensor shaped (N_PATS, 4).
-
-        """
-        if indices is None:
-            if orientations.shape[0] != self.n_patterns:
-                raise ValueError(
-                    f"Orientations must have the same number of patterns as the ExperimentPatterns object. "
-                    + f"Got {orientations.shape[0]} orientations and {self.n_patterns} patterns."
-                )
-            if orientations.shape[1] != 4:
-                raise ValueError(
-                    f"Orientations must be quaternions (w, x, y, z). Got {orientations.shape[1]} components."
-                )
-            self.orientations = orientations
-        else:
-            if orientations.shape[0] != indices.shape[0]:
-                raise ValueError(
-                    f"Orientations must have the same number of patterns as the indices. "
-                    + f"Got {orientations.shape[0]} orientations and {indices.shape[0]} indices."
-                )
-            if orientations.shape[1] != 4:
-                raise ValueError(
-                    f"Orientations must be quaternions (w, x, y, z). Got {orientations.shape[1]} components."
-                )
-            self.orientations[indices] = orientations
 
     def set_raw_indexing_results(
         self,

@@ -62,7 +62,7 @@ def clahe_grayscale(
     )
     tiles = tiles.view((B, voxels_per_tile, n_tiles))
     # permute from (B, voxels_per_tile, n_tiles) to (B, n_tiles, voxels_per_tile)
-    tiles = tiles.swapdims(-1, -2)
+    tiles = tiles.swapdims(-1, -2)  # tiles are ordered row-major
     # here we pre-allocate the pdf tensor to avoid having all residuals in memory at once
     pdf = torch.zeros((B, n_tiles, n_bins), device=x.device, dtype=torch.float32)
     # use scatter to do an inplace histogram calculation per tile
@@ -121,7 +121,7 @@ def clahe_grayscale(
     x = F.grid_sample(
         cdfs[:, None, :, :, :],  # (B, 1, n_bins, GH, GW)
         coords_into_cdfs,  # (B, 1, H, W, 3)
-        mode="nearest",
+        mode="bilinear",
         padding_mode="border",
         align_corners=False,
     )

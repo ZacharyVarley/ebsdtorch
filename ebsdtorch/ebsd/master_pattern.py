@@ -1,6 +1,7 @@
 """
 
-This module contains the MasterPattern class, which is used to handle multiple
+This module contains the MasterPattern class, which is used to handle interpolation
+of master patterns and apply CLAHE to them.
 
 """
 
@@ -15,7 +16,7 @@ from ebsdtorch.utils.symmetry_classes import (
 )
 from ebsdtorch.s2_and_so3.sphere import rosca_lambert_side_by_side
 from ebsdtorch.utils.factorize import nearly_square_factors
-from ebsdtorch.preprocessing.resampling import BlurAndDownsample
+from ebsdtorch.preprocessing.clahe import clahe_grayscale
 
 
 class MasterPattern(Module):
@@ -140,8 +141,8 @@ class MasterPattern(Module):
         self,
         coords_3D: Tensor,
         mode: str = "bilinear",
-        padding_mode: str = "zeros",
-        align_corners: bool = True,
+        padding_mode: str = "border",
+        align_corners: bool = False,
         normalize_coords: bool = True,
         virtual_binning: int = 1,
     ) -> Tensor:
@@ -197,3 +198,25 @@ class MasterPattern(Module):
 
         # reshape back to the original shape using coords_3D as a template
         return output.view(coords_3D.shape[:-1])
+
+    def apply_clahe(
+        self,
+        clip_limit: float = 40.0,
+        n_bins: int = 64,
+        grid_shape: Tuple[int, int] = (8, 8),
+    ):
+        """
+        Apply CLAHE to the master pattern.
+
+        Args:
+            :clip_limit (float): The clip limit for the histogram equalization.
+            :n_bins (int): The number of bins to use for the histogram equalization.
+            :grid_shape (Tuple[int, int]): The shape of the grid to divide the image into.
+
+        """
+        self.master_pattern = clahe_grayscale(
+            self.master_pattern[None, None, ...],
+            clip_limit=clip_limit,
+            n_bins=n_bins,
+            grid_shape=grid_shape,
+        )[0, 0]

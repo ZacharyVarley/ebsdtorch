@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ebsdtorch"
-version = "0.0.60"
+version = "0.0.61"
 license = "MIT"
 description = ""
 authors = ["Zachary Varley <zvarley@andrew.cmu.edu>"]

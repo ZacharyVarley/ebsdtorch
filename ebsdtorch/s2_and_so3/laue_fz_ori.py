@@ -240,6 +240,84 @@ def ori_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
 
 
 @torch.jit.script
+def cube_to_rfz(
+    cc: Tensor,
+    laue_group: int,
+) -> Tensor:
+    """
+    Convert cubed coordinates to RFZ coordinates for
+    a given Laue group.
+
+    Args:
+        :cc (Tensor): Cubed RFZ coordinates.
+        :laue_group (int): The Laue group.
+
+    Returns:
+        :rfz_coords (Tensor): The RFZ coordinates.
+
+    """
+    cc_abs = torch.abs(cc)
+
+    if laue_group == 11:  # cubic high symmetry
+        # find indices to do the sorting by absolute values
+        sorted, indices = torch.sort(cc_abs, dim=-1, descending=False)
+        # we are pointing towards the 111 normal plane
+        # find the scaling factor to hit the z = 2**0.5 - 1 face
+        scales = sorted[..., 2:3] < (sorted[..., 0:1] + sorted[..., 1:2]) / 2**0.5
+        factors = (
+            torch.sum(cc_abs, dim=-1, keepdim=True) * (2**0.5 - 1) / sorted[..., 2:3]
+        )
+        # replace nans with 1 because we were at the origin
+        factors[factors.isnan()] = 1
+        # scale the sorted values
+        rfz_coords = torch.where(scales, sorted * factors, sorted)
+        # scatter the sorted values back to the original order
+        rfz_coords = torch.scatter(rfz_coords, -1, indices, rfz_coords)
+        # copy the sign of the original values
+        rfz_coords.copysign_(cc)
+        return rfz_coords
+    else:
+        raise NotImplementedError("Only cubic is supported for now.")
+
+
+@torch.jit.script
+def rfz_to_cube(
+    rfz: Tensor,
+    laue_group: int,
+) -> Tensor:
+    """
+    Convert RFZ coordinates to cubed coordinates for
+    a given Laue group.
+
+    Args:
+        :rfz_coords (Tensor): The RFZ coordinates.
+        :laue_group (int): The Laue group.
+
+    Returns:
+        :cc (Tensor): The cubed coordinates.
+
+    """
+    rfz_abs = torch.abs(rfz)
+
+    if laue_group == 11:  # cubic high symmetry
+        # same as above but with reciprocal scaling
+        sorted, indices = torch.sort(rfz_abs, dim=-1, descending=False)
+        scales = sorted[..., 2:3] < (sorted[..., 0:1] + sorted[..., 1:2]) / 2**0.5
+        # same factor but we divide by it
+        factors = (
+            torch.sum(rfz_abs, dim=-1, keepdim=True) * (2**0.5 - 1) / sorted[..., 2:3]
+        )
+        factors[factors.isnan()] = 1
+        cc = torch.where(scales, sorted / factors, sorted)
+        cc = torch.scatter(cc, -1, indices, cc)
+        cc.copysign_(rfz)
+        return cc
+
+    else:
+        raise NotImplementedError("Only cubic is supported for now.")
+
+
+@torch.jit.script
 def ori_angle_laue(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
     """
 

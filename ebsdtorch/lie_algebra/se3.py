@@ -444,9 +444,9 @@ def se3_log_map_om(se3: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def se3_log_map_R_tvec(R: Tensor, tvec: Tensor) -> Tensor:
+def se3_log_map_split(R: Tensor, tvec: Tensor) -> Tensor:
     """
-    Compute omega and tvec from an SE3 matrix.
+    Compute omega and tvec from an SE3 matrix given as R and tvec.
 
     Args:
         R: torch tensor of shape (..., 3, 3) containing the rotation matrix

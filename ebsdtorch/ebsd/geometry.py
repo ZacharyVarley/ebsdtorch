@@ -17,14 +17,14 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 from ebsdtorch.lie_algebra.se3 import (
-    se3_log_map_R_tvec,
+    se3_log_map_split,
     se3_exp_map_split,
     se3_exp_map_om,
 )
 
 
 @torch.jit.script
-def bruker_pattern_centers_to_SE3(
+def bruker_geometry_to_SE3(
     pattern_centers: Tensor,
     sample_y_tilt_radians: Tensor,
     sample_x_tilt_radians: Tensor,
@@ -106,48 +106,46 @@ def bruker_pattern_centers_to_SE3(
         return out
 
 
-@torch.jit.script
-def SE3_translation_vector_to_pc(
-    translation_vector: Tensor,
-    sample_y_tilt_radians: Tensor,
-    sample_x_tilt_radians: Tensor,
-    detector_tilt_radians: Tensor,
-    detector_shape: Tuple[int, int],
-):
+def geometry_parameters_to_se3(
+    pattern_shape: Tuple[int, int],
+    pattern_center: Optional[Tensor] = None,
+    ref_frame_rotations_deg: Optional[Tensor] = None,
+) -> Tensor:
     """
-    Convert SE3 transformation (specifically the translation vector) to pattern
-    center parameters. This is NOT valid if a different rotation matrix was
-    associated with the translation vector.
+    Take in the various scalar descriptions of the geometry and return the Lie algebra
+    tangent space vector.
 
     Args:
-        translation_vector (torch.Tensor): The translation vector (..., 3).
-        sample_y_tilt_radians (torch.Tensor): Tilt of the sample about the y-axis in radians.
-        sample_x_tilt_radians (torch.Tensor): Tilt of the sample about the x-axis in radians.
-        detector_tilt_radians (torch.Tensor): Declination tilt of the detector in radians.
-        detector_shape (Tuple[int, int]): Pattern shape in pixels, (H, W) with 'ij' indexing.
+        :pattern_shape (Tuple[int, int]): The pattern shape.
+        :pattern_center (Tensor): The pattern center guess. (0.5, 0.5, 0.5) default.
+        :ref_frame_rotations (Tensor): The reference frame rotations (70, 0, 0) default.
 
     Returns:
-        torch.Tensor: Pattern center parameters (pcx, pcy, pcz).
+        :se3_vec (Tensor): se(3) Lie algebra vector (6D) with z-axis rotation removed (5D).
+
     """
-    tx, ty, tz = torch.unbind(translation_vector, dim=-1)
-    rows, cols = detector_shape
-    rows, cols = float(rows), float(cols)
-    sy, sx, dt = sample_y_tilt_radians, sample_x_tilt_radians, detector_tilt_radians
 
-    pcx = (
-        tx * torch.sin(sx) * torch.cos(dt - sy)
-        - ty * torch.cos(sx)
-        - tz * torch.sin(sx) * torch.sin(dt - sy)
-        + 0.5
-    ) / cols
-    pcy = (tx * torch.sin(dt - sy) + tz * torch.cos(dt - sy) + 0.5) / rows
-    pcz = (
-        tx * torch.cos(sx) * torch.cos(dt - sy)
-        + ty * torch.sin(sx)
-        - tz * torch.sin(dt - sy) * torch.cos(sx)
-    ) / rows
+    if pattern_center is None:
+        pattern_center = torch.tensor([0.5, 0.5, 0.5])
 
-    return torch.stack([pcx, pcy, pcz], dim=-1)
+    if ref_frame_rotations_deg is None:
+        ref_frame_rotations_deg = torch.tensor([70.0, 0.0, 0.0])
+
+    ref_frame_rotations_rad = ref_frame_rotations_deg * (torch.pi / 180)
+
+    rotation_matrix, translation = bruker_geometry_to_SE3(
+        pattern_center[None, :],
+        ref_frame_rotations_rad[0],
+        ref_frame_rotations_rad[1],
+        ref_frame_rotations_rad[2],
+        detector_shape=pattern_shape,
+        split=True,  # return rotation matrix and translation separately not 4x4 SE3 matrix
+    )
+
+    # get the Lie algebra vector: shape (1, 6)
+    se3_vec = se3_log_map_split(rotation_matrix, translation)
+
+    return se3_vec
 
 
 class EBSDGeometry(Module):
@@ -220,7 +218,7 @@ class EBSDGeometry(Module):
         self.register_buffer("detector_tilt_rad", tilts_radians[2])
 
         # convert the projection center to a un-optimized SE3 matrix
-        pc_SE3 = bruker_pattern_centers_to_SE3(
+        pc_SE3 = bruker_geometry_to_SE3(
             torch.tensor(proj_center).view(1, 3),
             self.sample_y_tilt_rad,
             self.sample_x_tilt_rad,

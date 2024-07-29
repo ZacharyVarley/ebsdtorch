@@ -1,6 +1,10 @@
 import torch
 import pytest
-from ebsdtorch.wigner.wigner_d_general import build_jkm_volume
+from ebsdtorch.harmonics.wigner_d_logspace import (
+    wigner_d_eq_half_pi,
+    wigner_d_lt_half_pi,
+    read_lmn_wigner_d_half_pi_table,
+)
 
 test_parameters = [
     # test case taken from http://dx.doi.org/10.13140/RG.2.2.31922.20160
@@ -18,7 +22,9 @@ test_parameters = [
     "j, k, m, correct_value, beta",
     test_parameters,
 )
-def test_build_jkm_volume(j, k, m, correct_value, beta):
-    volume = build_jkm_volume(j, k, beta, torch.device("cpu"))
-    d_value = volume[j, k, m]
+def test_wigner(j, k, m, correct_value, beta):
+    table = wigner_d_lt_half_pi(
+        beta, order_max=370, dtype=torch.float64, device=torch.device("cpu")
+    )
+    d_value = read_lmn_wigner_d_half_pi_table(table, coords=torch.tensor([j, k, m]))
     assert torch.isclose(d_value, correct_value, atol=1e-14)

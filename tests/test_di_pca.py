@@ -1,6 +1,6 @@
 from ebsdtorch.ebsd.geometry import EBSDGeometry
-from ebsdtorch.ebsd.ebsd_master_patterns import MasterPattern
-from ebsdtorch.ebsd.ebsd_experiment_pats import ExperimentPatterns
+from ebsdtorch.ebsd.master_pattern import MasterPattern
+from ebsdtorch.ebsd.experiment_pats import ExperimentPatterns
 from ebsdtorch.ebsd.indexing import pca_dictionary_index_orientations
 import torch
 import pytest
@@ -22,7 +22,6 @@ def test_ebsd_di():
     # create the experiment patterns object
     exp_pats = ExperimentPatterns(
         torch.randn((2, 5, 5), dtype=torch.float32),
-        spatial_coords=torch.randn((2, 2), dtype=torch.float32),
     )
 
     return geom, mp, exp_pats

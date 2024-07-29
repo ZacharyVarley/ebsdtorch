@@ -158,7 +158,7 @@ class ChunkedKNN:
         )
 
         self.prepared_data = None
-        self.data_start = 0
+        self.curr_end = 0  # 0 indexed
 
     def set_data_chunk(self, data_chunk: Tensor):
         """
@@ -169,10 +169,9 @@ class ChunkedKNN:
         """
         data_chunk = data_chunk.to(self.match_dtype).to(self.match_device)
 
-        if self.prepared_data is not None:
-            # Update data start index by size of the previous chunk
-            # that is about to be discarded
-            self.data_start += data_chunk.shape[0]
+        # it is easier to track the current end index than the start index
+        self.curr_end += data_chunk.shape[0]
+        self.curr_start = self.curr_end - data_chunk.shape[0]
 
         # Quantize the data if needed
         if self.quantized and self.match_device.type == "cpu":
@@ -204,7 +203,7 @@ class ChunkedKNN:
             )
 
         # chunk indices -> global indices
-        knn_inds_chunk += self.data_start
+        knn_inds_chunk += self.curr_start
 
         # Merge the old and new top-k indices and distances
         merged_knn_dists = torch.cat((self.knn_distances, knn_dists_chunk), dim=1)
@@ -243,7 +242,7 @@ class ChunkedKNN:
                 self.prepared_data, query_chunk, self.topk, self.distance_metric
             )
 
-        knn_indices_chunk += self.data_start
+        knn_indices_chunk += self.curr_start
 
         # Merge the old and new top-k indices and distances
         old_knn_indices = self.knn_indices[query_start:query_end]

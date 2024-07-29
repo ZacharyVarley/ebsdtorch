@@ -1,7 +1,7 @@
 import h5py as hf
 import numpy as np
 import torch
-from ebsdtorch.ebsd.ebsd_master_patterns import MasterPattern
+from ebsdtorch.ebsd.master_pattern import MasterPattern
 
 
 def read_master_pattern(file_path) -> MasterPattern:
@@ -43,7 +43,7 @@ def read_master_pattern(file_path) -> MasterPattern:
 
     # concatenate the master patterns along the first dimension
     # this make interpolation easier and faster
-    master_pattern = np.concatenate([master_pattern_NH, master_pattern_SH], axis=0)
+    master_pattern = np.concatenate([master_pattern_NH, master_pattern_SH], axis=-1)
 
     # create the master pattern object
     master_pattern_obj = MasterPattern(
