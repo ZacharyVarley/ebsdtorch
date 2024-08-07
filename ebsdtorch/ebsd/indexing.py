@@ -6,6 +6,7 @@ from ebsdtorch.ebsd.geometry import EBSDGeometry
 from typing import Optional, Union, List
 from ebsdtorch.s2_and_so3.laue_fz_ori import sample_ori_fz_laue_angle
 from ebsdtorch.s2_and_so3.quaternions import qu_apply
+from ebsdtorch.s2_and_so3.sphere import inv_rosca_lambert
 from ebsdtorch.preprocessing.radial_mask import get_radial_mask
 from ebsdtorch.utils.knn import ChunkedKNN
 from ebsdtorch.utils.progressbar import progressbar
@@ -216,6 +217,7 @@ def pca_dictionary_index_orientations(
     master_patterns: Union[MasterPattern, List[MasterPattern]],
     geometry: EBSDGeometry,
     experiment_patterns: ExperimentPatterns,
+    n_pca_components: int,
     signal_mask: Optional[Tensor] = None,
     subtract_exp_pat_mean: bool = True,
     experiment_chunk_size: int = 256,
@@ -223,7 +225,6 @@ def pca_dictionary_index_orientations(
     dictionary_chunk_size: int = 256,
     virtual_binning: int = 1,
     top_k_matches: int = 1,
-    n_pca_components: int = 0,
     distance_metric: str = "angular",
     match_dtype: torch.dtype = torch.float16,
     quantized_via_ao: bool = True,

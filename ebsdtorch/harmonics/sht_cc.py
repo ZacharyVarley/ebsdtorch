@@ -96,13 +96,11 @@ def rs2cc_(
     gconj = g.conj()
 
     for l in range(B):
-        if (l % 2) == 1:
-            continue
         m_inds_half = torch.arange(0, l + 1, dtype=torch.int32, device=f.device)
         # get the relevant harmonic coefficients for g and f for the current l
         g_n = torch.cat(
             [
-                g[:, m_inds_half[1:], l].flip(1) * (-1.0) ** m_inds_half[1:].flip(0),
+                (g[:, m_inds_half[1:], l] * (-1.0) ** m_inds_half[1:][None, :]).flip(1),
                 gconj[:, m_inds_half, l],
             ],
             dim=1,
@@ -203,9 +201,9 @@ def rs2cc_fast_(
         dim=1,
     )
 
-    cc = torch.einsum(
-        "bml,bnl,lmk,lkn->bmkn", f, g_n_aug, d_lmk[:, (B - 1) :, :], d_lmk
-    )
+    f_lmkb = torch.einsum("lmk,bml->lmkb", d_lmk[:, (B - 1) :, :], f)
+    g_lknb = torch.einsum("lkn,bnl->lknb", d_lmk, g_n_aug)
+    cc = torch.einsum("lmkb,lknb->bmkn", f_lmkb, g_lknb)
 
     # Need to do fftshift so that the low frequencies are at the periphery
     cc = ifftshift(cc, dim=(-1, -2))
@@ -317,7 +315,7 @@ def cs2cc_(
 
 # # test it by doing autocorrelation of a master pattern with itself
 # L = 256
-# L_trunc = 64
+# L_trunc = 128
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # # device = torch.device("cpu")
 
@@ -385,29 +383,29 @@ def cs2cc_(
 # print(f"ideal_max_r: {ideal_max_r}")
 # print(f"ideal_max_c: {ideal_max_c}")
 
-# # d_lmk = torch.zeros(
-# #     (L_trunc, 2 * L_trunc - 1, 2 * L_trunc - 1),
-# #     dtype=torch.float32,
-# #     device=device,
-# # )
+# d_lmk = torch.zeros(
+#     (L_trunc, 2 * L_trunc - 1, 2 * L_trunc - 1),
+#     dtype=torch.float32,
+#     device=device,
+# )
 
-# # ll, nn, kk = torch.meshgrid(
-# #     torch.arange(0, L_trunc, dtype=torch.int32, device=device),
-# #     torch.arange(-L_trunc + 1, L_trunc, dtype=torch.int32, device=device),
-# #     torch.arange(-L_trunc + 1, L_trunc, dtype=torch.int32, device=device),
-# #     indexing="ij",
-# # )
+# ll, nn, kk = torch.meshgrid(
+#     torch.arange(0, L_trunc, dtype=torch.int32, device=device),
+#     torch.arange(-L_trunc + 1, L_trunc, dtype=torch.int32, device=device),
+#     torch.arange(-L_trunc + 1, L_trunc, dtype=torch.int32, device=device),
+#     indexing="ij",
+# )
 
-# # valid = (nn.abs() <= ll) & (kk.abs() <= ll)
-# # d_lmk[valid] = read_lmn_wigner_d_half_pi_table(
-# #     wigner_table,
-# #     coords=torch.stack([ll[valid], nn[valid], kk[valid]], dim=-1),
-# # )
+# valid = (nn.abs() <= ll) & (kk.abs() <= ll)
+# d_lmk[valid] = read_lmn_wigner_d_half_pi_table(
+#     wigner_table,
+#     coords=torch.stack([ll[valid], nn[valid], kk[valid]], dim=-1),
+# )
 
-# # d_lmk = d_lmk.to(torch.complex64)
+# d_lmk = d_lmk.to(torch.complex64)
 
-# # cc_r = rs2cc_fast_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs, d_lmk)
-# cc_r = rs2cc_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs, wigner_table)
+# cc_r = rs2cc_fast_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs, d_lmk)
+# # cc_r = rs2cc_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs, wigner_table)
 # cc_c = cs2cc_(L_trunc, mp_spherical_c_coeffs, mp_spherical_c_coeffs, wigner_table)
 
 # print(f"cc_r shape: {cc_r.shape}")
@@ -430,62 +428,62 @@ def cs2cc_(
 # cc_c = (cc_c * 255).byte().squeeze(0).cpu().numpy()
 # cc_r = (cc_r * 255).byte().squeeze(0).cpu().numpy()
 
-# from PIL import Image
-# import cv2
-# import numpy as np
+# # from PIL import Image
+# # import cv2
+# # import numpy as np
 
-# # make compressed video instead of gif
-# fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-
-
-# # use a function instead for compactness
-# def write_video(fourcc, fname, cc, dim):
-#     if dim == 0:
-#         out = cv2.VideoWriter(
-#             fname, fourcc, 10, (cc.shape[2], cc.shape[1]), isColor=False
-#         )
-#         for i in range(cc.shape[0]):
-#             out.write(cc[i, :, :])
-#         out.release()
-#     elif dim == 1:
-#         out = cv2.VideoWriter(
-#             fname, fourcc, 10, (cc.shape[2], cc.shape[0]), isColor=False
-#         )
-#         for i in range(cc.shape[1]):
-#             out.write(cc[:, i, :])
-#         out.release()
-#     elif dim == 2:
-#         out = cv2.VideoWriter(
-#             fname, fourcc, 10, (cc.shape[1], cc.shape[0]), isColor=False
-#         )
-#         for i in range(cc.shape[2]):
-#             out.write(cc[:, :, i])
-#         out.release()
-#     else:
-#         raise ValueError(f"dim {dim} is not valid")
+# # # make compressed video instead of gif
+# # fourcc = cv2.VideoWriter_fourcc(*"MJPG")
 
 
-# # write each mp4
-# fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-# write_video(fourcc, "cc_r_m.mp4", cc_r, 0)
-# write_video(fourcc, "cc_r_k.mp4", cc_r, 1)
-# write_video(fourcc, "cc_r_n.mp4", cc_r, 2)
+# # # use a function instead for compactness
+# # def write_video(fourcc, fname, cc, dim):
+# #     if dim == 0:
+# #         out = cv2.VideoWriter(
+# #             fname, fourcc, 30, (cc.shape[2], cc.shape[1]), isColor=False
+# #         )
+# #         for i in range(cc.shape[0]):
+# #             out.write(cc[i, :, :])
+# #         out.release()
+# #     elif dim == 1:
+# #         out = cv2.VideoWriter(
+# #             fname, fourcc, 30, (cc.shape[2], cc.shape[0]), isColor=False
+# #         )
+# #         for i in range(cc.shape[1]):
+# #             out.write(cc[:, i, :])
+# #         out.release()
+# #     elif dim == 2:
+# #         out = cv2.VideoWriter(
+# #             fname, fourcc, 30, (cc.shape[1], cc.shape[0]), isColor=False
+# #         )
+# #         for i in range(cc.shape[2]):
+# #             out.write(cc[:, :, i])
+# #         out.release()
+# #     else:
+# #         raise ValueError(f"dim {dim} is not valid")
 
-# write_video(fourcc, "cc_c_m.mp4", cc_c, 0)
-# write_video(fourcc, "cc_c_k.mp4", cc_c, 1)
-# write_video(fourcc, "cc_c_n.mp4", cc_c, 2)
+
+# # # write each mp4
+# # fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+# # write_video(fourcc, "cc_r_m.mp4", cc_r, 0)
+# # write_video(fourcc, "cc_r_k.mp4", cc_r, 1)
+# # write_video(fourcc, "cc_r_n.mp4", cc_r, 2)
+
+# # write_video(fourcc, "cc_c_m.mp4", cc_c, 0)
+# # write_video(fourcc, "cc_c_k.mp4", cc_c, 1)
+# # write_video(fourcc, "cc_c_n.mp4", cc_c, 2)
 
 
 # # make a batch of coefficients of real valued signal and measure the speed
 # # of the cross correlation via 10 iterations
+# import time
+
 # n_iters = 10
-# batch_size = 16
+# batch_size = 4
 # mp_spherical_r_coeffs_batch = mp_spherical_r_coeffs.repeat(batch_size, 1, 1)
 
 # cc_r = rs2cc_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, wigner_table)
 # cc_r = rs2cc_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, wigner_table)
-
-# import time
 
 # start = time.time()
 
@@ -500,54 +498,54 @@ def cs2cc_(
 
 # print(f"SLOW: CC per second: {n_iters * batch_size / duration}")
 
-# # start = time.time()
+# start = time.time()
 
-# # cc_r = rs2cc_fast_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, d_lmk)
+# cc_r = rs2cc_fast_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, d_lmk)
 
-# # for i in range(n_iters):
-# #     cc_r = rs2cc_fast_(
-# #         L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, d_lmk
-# #     )
+# for i in range(n_iters):
+#     cc_r = rs2cc_fast_(
+#         L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, d_lmk
+#     )
 
-# # torch.cuda.synchronize()
+# torch.cuda.synchronize()
 
-# # duration = time.time() - start
+# duration = time.time() - start
 
-# # print(f"FAST: CC per second: {n_iters * batch_size / duration}")
+# print(f"FAST: CC per second: {n_iters * batch_size / duration}")
 
 
-# # plot with plotly now
-# import plotly.graph_objects as go
-# import numpy as np
+# # # plot with plotly now
+# # import plotly.graph_objects as go
+# # import numpy as np
 
-# X, Y, Z = np.meshgrid(
-#     np.arange(cc_c.shape[0]),
-#     np.arange(cc_c.shape[1]),
-#     np.arange(cc_c.shape[2]),
-#     indexing="ij",
-# )
+# # X, Y, Z = np.meshgrid(
+# #     np.arange(cc_c.shape[0]),
+# #     np.arange(cc_c.shape[1]),
+# #     np.arange(cc_c.shape[2]),
+# #     indexing="ij",
+# # )
 
-# print(f"X shape: {X.shape}")
-# print(f"Y shape: {Y.shape}")
-# print(f"Z shape: {Z.shape}")
-# print(f"cc_c shape: {cc_c.shape}")
+# # print(f"X shape: {X.shape}")
+# # print(f"Y shape: {Y.shape}")
+# # print(f"Z shape: {Z.shape}")
+# # print(f"cc_c shape: {cc_c.shape}")
 
-# fig = go.Figure(
-#     data=[
-#         go.Volume(
-#             x=X.flatten().astype(np.int8),
-#             y=Y.flatten().astype(np.int8),
-#             z=Z.flatten().astype(np.int8),
-#             value=cc_c.flatten(),
-#             isomin=0,
-#             isomax=150,
-#             opacity=0.15,  # needs to be small to see through all surfaces
-#             surface_count=5,  # needs to be a large number for good volume rendering
-#         )
-#     ]
-# )
+# # fig = go.Figure(
+# #     data=[
+# #         go.Volume(
+# #             x=X.flatten().astype(np.int8),
+# #             y=Y.flatten().astype(np.int8),
+# #             z=Z.flatten().astype(np.int8),
+# #             value=cc_c.flatten(),
+# #             isomin=0,
+# #             isomax=150,
+# #             opacity=0.15,  # needs to be small to see through all surfaces
+# #             surface_count=5,  # needs to be a large number for good volume rendering
+# #         )
+# #     ]
+# # )
 
-# # fig.show()
+# # # fig.show()
 
-# # write html
-# fig.write_html("cc_c.html")
+# # # write html
+# # fig.write_html("cc_c.html")

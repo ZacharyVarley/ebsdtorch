@@ -89,6 +89,7 @@ class MasterPattern(Module):
 
         self.master_pattern = master_pattern
         self.master_pattern_binned = None
+        self.factor_dict = {}
 
     def bin(
         self,
@@ -182,7 +183,15 @@ class MasterPattern(Module):
         # instead we find the pseudo height and width closest to that of a square
         # (..., 3) -> (1, H*, W*, 2) -> (...,) where H* x W* = n_coords
         #  3rd fastest integer factorization algorithm is good for small numbers
-        H_pseudo, W_pseudo = nearly_square_factors(prod(projected_coords_2D.shape[:-1]))
+        n_elem = prod(projected_coords_2D.shape[:-1])
+        if n_elem in self.factor_dict:
+            H_pseudo, W_pseudo = self.factor_dict[n_elem]
+        else:
+            H_pseudo, W_pseudo = nearly_square_factors(n_elem)
+            if len(self.factor_dict) > 100:
+                self.factor_dict = {}
+            self.factor_dict[n_elem] = H_pseudo, W_pseudo
+
         projected_coords_2D = projected_coords_2D.view(H_pseudo, W_pseudo, 2)
 
         output = torch.nn.functional.grid_sample(

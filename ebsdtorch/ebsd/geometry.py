@@ -26,126 +26,109 @@ from ebsdtorch.lie_algebra.se3 import (
 @torch.jit.script
 def bruker_geometry_to_SE3(
     pattern_centers: Tensor,
-    sample_y_tilt_radians: Tensor,
-    sample_x_tilt_radians: Tensor,
-    detector_tilt_radians: Tensor,
+    primary_tilt_deg: Tensor,
+    secondary_tilt_deg: Tensor,
     detector_shape: Tuple[int, int],
-    split: bool = True,
-) -> Union[Tuple[Tensor, Tensor], Tensor]:
+) -> Tuple[Tensor, Tensor]:
     """
     Convert pattern centers in Bruker coordinates to SE3 transformation matrix.
 
     Args:
-        pattern_centers:
-            The projection center(s). Shape (n_pcs, 3)
-        sample_y_tilt_degrees:
-            Tilts of the sample about the y-axis in degrees.
-        sample_x_tilt_degrees:
-            Tilts of the sample about the x-axis in degrees.
-        detector_tilt_degrees:
-            Declination tilts of the detector in degrees.
-        detector_shape:
-            Pattern shape in pixels, H x W with 'ij' indexing. Number
-            of rows of pixels then number of columns of pixels.
-        split:
-            Whether to return the rotation matrix and translation vector
-            instead of the combined SE3 matrix with an extra row. Default is True.
+        :pattern_centers (Tensor): The pattern centers.
+        :primary_tilt_deg (Tensor): The primary tilt in degrees.
+        :secondary_tilt_deg (Tensor): The secondary tilt in degrees.
+        :detector_shape (Tuple[int, int]): The detector shape.
 
     Returns:
-        Rotation matrices (n_pcs, 3, 3) and translation vectors (n_pcs, 3).
+        Rotation matrices (..., 3, 3) and translation vectors (..., 3).
 
     """
 
     pcx, pcy, pcz = torch.unbind(pattern_centers, dim=-1)
     rows, cols = detector_shape
     rows, cols = float(rows), float(cols)
-    sy, sx, dt = sample_y_tilt_radians, sample_x_tilt_radians, detector_tilt_radians
+
+    # convert to radians
+    dt_m_sy = torch.deg2rad(primary_tilt_deg)
+    sx = torch.deg2rad(secondary_tilt_deg)
 
     rotation_matrix = torch.stack(
         [
-            -torch.sin(dt - sy),
-            -torch.sin(sx) * torch.cos(dt - sy),
-            torch.cos(sx) * torch.cos(dt - sy),
+            -torch.sin(dt_m_sy),
+            -torch.sin(sx) * torch.cos(dt_m_sy),
+            torch.cos(sx) * torch.cos(dt_m_sy),
             torch.zeros_like(sx),
             torch.cos(sx),
             torch.sin(sx),
-            -torch.cos(dt - sy),
-            torch.sin(sx) * torch.sin(dt - sy),
-            -torch.sin(dt - sy) * torch.cos(sx),
+            -torch.cos(dt_m_sy),
+            torch.sin(sx) * torch.sin(dt_m_sy),
+            -torch.sin(dt_m_sy) * torch.cos(sx),
         ],
-        dim=0,
+        dim=-1,
     ).view(-1, 3, 3)
 
     tx = (
-        pcx * cols * torch.sin(sx) * torch.cos(dt - sy)
-        + pcy * rows * torch.sin(dt - sy)
-        + pcz * rows * torch.cos(sx) * torch.cos(dt - sy)
-        - torch.sin(sx) * torch.cos(dt - sy) / 2
-        - torch.sin(dt - sy) / 2
+        pcx * cols * torch.sin(sx) * torch.cos(dt_m_sy)
+        + pcy * rows * torch.sin(dt_m_sy)
+        + pcz * rows * torch.cos(sx) * torch.cos(dt_m_sy)
+        - torch.sin(sx) * torch.cos(dt_m_sy) / 2
+        - torch.sin(dt_m_sy) / 2
     )
     ty = -cols * pcx * torch.cos(sx) + pcz * rows * torch.sin(sx) + torch.cos(sx) / 2
     tz = (
-        -cols * pcx * torch.sin(sx) * torch.sin(dt - sy)
-        + pcy * rows * torch.cos(dt - sy)
-        - pcz * rows * torch.sin(dt - sy) * torch.cos(sx)
-        + torch.sin(sx) * torch.sin(dt - sy) / 2
-        - torch.cos(dt - sy) / 2
+        -cols * pcx * torch.sin(sx) * torch.sin(dt_m_sy)
+        + pcy * rows * torch.cos(dt_m_sy)
+        - pcz * rows * torch.sin(dt_m_sy) * torch.cos(sx)
+        + torch.sin(sx) * torch.sin(dt_m_sy) / 2
+        - torch.cos(dt_m_sy) / 2
     )
-
     translation_vector = torch.stack([tx, ty, tz], dim=-1)
 
-    if split:
-        return rotation_matrix, translation_vector
-    else:
-        out = torch.zeros(
-            (pattern_centers.shape[0], 4, 4), device=pattern_centers.device
-        )
-        out[:, :3, :3] = rotation_matrix
-        out[:, :3, 3] = translation_vector
-        out[:, 3, 3] = 1.0
-        return out
+    return rotation_matrix, translation_vector
 
 
-def geometry_parameters_to_se3(
-    pattern_shape: Tuple[int, int],
-    pattern_center: Optional[Tensor] = None,
-    ref_frame_rotations_deg: Optional[Tensor] = None,
-) -> Tensor:
+@torch.jit.script
+def bruker_geometry_from_SE3(
+    rotation_matrix: Tensor,
+    translation_vector: Tensor,
+    detector_shape: Tuple[int, int],
+):
     """
-    Take in the various scalar descriptions of the geometry and return the Lie algebra
-    tangent space vector.
+    Convert SE3 transformation back to Bruker geometry (invalid if z-axis rotation was optimized).
 
     Args:
-        :pattern_shape (Tuple[int, int]): The pattern shape.
-        :pattern_center (Tensor): The pattern center guess. (0.5, 0.5, 0.5) default.
-        :ref_frame_rotations (Tensor): The reference frame rotations (70, 0, 0) default.
+        rotation_matrix (torch.Tensor): The rotation matrix (..., 3, 3).
+        translation_vector (torch.Tensor): The translation vector (..., 3).
+        detector_shape (Tuple[int, int]): Pattern shape in pixels, (H, W) with 'ij' indexing.
 
     Returns:
-        :se3_vec (Tensor): se(3) Lie algebra vector (6D) with z-axis rotation removed (5D).
-
+        torch.Tensor: Pattern center parameters (pcx, pcy, pcz).
     """
+    tx, ty, tz = torch.unbind(translation_vector, dim=-1)
+    rows, cols = detector_shape
+    rows, cols = float(rows), float(cols)
 
-    if pattern_center is None:
-        pattern_center = torch.tensor([0.5, 0.5, 0.5])
+    cos_sx = rotation_matrix[..., 1, 1]
+    cos_dt_minus_sy = rotation_matrix[..., 0, 2] / cos_sx
+    dt_minus_sy = torch.acos(cos_dt_minus_sy.clamp_(min=-1, max=1))
+    sx = torch.acos(cos_sx.clamp_(min=-1, max=1))
 
-    if ref_frame_rotations_deg is None:
-        ref_frame_rotations_deg = torch.tensor([70.0, 0.0, 0.0])
+    pcx = (
+        tx * torch.sin(sx) * torch.cos(dt_minus_sy)
+        - ty * torch.cos(sx)
+        - tz * torch.sin(dt_minus_sy) * torch.sin(sx)
+        + 0.5
+    ) / cols
+    pcy = (tx * torch.sin(dt_minus_sy) + tz * torch.cos(dt_minus_sy) + 0.5) / rows
+    pcz = (
+        tx * torch.cos(dt_minus_sy) * torch.cos(sx)
+        + ty * torch.sin(sx)
+        - tz * torch.sin(dt_minus_sy) * torch.cos(sx)
+    ) / rows
 
-    ref_frame_rotations_rad = ref_frame_rotations_deg * (torch.pi / 180)
+    pattern_centers = torch.stack([pcx, pcy, pcz], dim=-1)
 
-    rotation_matrix, translation = bruker_geometry_to_SE3(
-        pattern_center[None, :],
-        ref_frame_rotations_rad[0],
-        ref_frame_rotations_rad[1],
-        ref_frame_rotations_rad[2],
-        detector_shape=pattern_shape,
-        split=True,  # return rotation matrix and translation separately not 4x4 SE3 matrix
-    )
-
-    # get the Lie algebra vector: shape (1, 6)
-    se3_vec = se3_log_map_split(rotation_matrix, translation)
-
-    return se3_vec
+    return pattern_centers, torch.rad2deg(dt_minus_sy), torch.rad2deg(sx)
 
 
 class EBSDGeometry(Module):
@@ -210,22 +193,22 @@ class EBSDGeometry(Module):
         self.detector_shape = detector_shape
 
         # convert the tilts to radians
-        tilts_radians = tuple(
-            torch.deg2rad(torch.tensor(tilt)) for tilt in tilts_degrees
-        )
-        self.register_buffer("sample_x_tilt_rad", tilts_radians[0])
-        self.register_buffer("sample_y_tilt_rad", tilts_radians[1])
-        self.register_buffer("detector_tilt_rad", tilts_radians[2])
+        tilts_deg = tuple(torch.tensor(tilt) for tilt in tilts_degrees)
+        self.register_buffer("sample_x_tilt_deg", tilts_deg[0])
+        self.register_buffer("sample_y_tilt_deg", tilts_deg[1])
+        self.register_buffer("detector_tilt_deg", tilts_deg[2])
 
         # convert the projection center to a un-optimized SE3 matrix
-        pc_SE3 = bruker_geometry_to_SE3(
+        rot, translation = bruker_geometry_to_SE3(
             torch.tensor(proj_center).view(1, 3),
-            self.sample_y_tilt_rad,
-            self.sample_x_tilt_rad,
-            self.detector_tilt_rad,
+            self.detector_tilt_deg - self.sample_y_tilt_deg,
+            self.sample_x_tilt_deg,
             self.detector_shape,
-            split=False,
         )
+        pc_SE3 = torch.zeros(1, 4, 4)
+        pc_SE3[..., :3, :3] = rot
+        pc_SE3[..., :3, 3] = translation
+        pc_SE3[..., 3, 3] = 1.0
         self.register_buffer("pc_SE3_matrix", pc_SE3)
 
         # convert the SE3 matrix to a parameter

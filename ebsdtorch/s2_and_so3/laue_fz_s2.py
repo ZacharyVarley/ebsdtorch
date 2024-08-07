@@ -43,7 +43,7 @@ def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
     PI_n23 = -2.0 * torch.pi / 3.0
 
     # set epsilon
-    EPS = 1e-12
+    EPS = 1e-12 if points.dtype == torch.float64 else 1e-6
 
     # use rules to find the equivalent points in the fundamental zone
     x, y, z = points[..., 0], points[..., 1], points[..., 2]
@@ -51,7 +51,9 @@ def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
     eta = torch.atan2(y, x)
     chi = torch.acos(z)
 
-    if laue_id == 1 or laue_id == 2:  # triclinic, monoclinic
+    if laue_id == 1:  # triclinic
+        cond = z >= 0.0
+    elif laue_id == 2:  # monoclinic
         cond = eta.ge(0.0) & eta.le(torch.pi + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
     elif laue_id == 3 or laue_id == 4:  # orthorhombic, tetragonal-low
         cond = eta.ge(0.0) & eta.le(PI_2 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
@@ -79,25 +81,74 @@ def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
             & eta.le(PI_2 + EPS)
             & chi.ge(0.0)
         )
-
     elif laue_id == 11:  # cubic-high
         # where eta is over 45 degrees, subtract from 90 degrees
         cond = (
             torch.where(
-                eta.ge(PI_4),
+                eta.gt(PI_4),
                 chi
-                <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(PI_2 - eta) ** 2)))
+                < torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(PI_2 - eta) ** 2)))
                 + EPS,
                 chi <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(eta) ** 2))) + EPS,
             )
-            & eta.ge(0.0)
-            & eta.le(PI_4 + EPS)
-            & chi.ge(0.0)
+            & eta.gt(0.0)
+            & eta.lt(PI_4 + EPS)
+            & chi.gt(0.0)
         )
     else:
         raise ValueError(f"Laue id {laue_id} not in [1, 11]")
-
     return cond
+
+
+# # get planar coordinates that are within the fundamental sector
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# planar_coords = torch.stack(
+#     torch.meshgrid(
+#         torch.linspace(-1.0, 1.0, 200, device=device),
+#         torch.linspace(-1.0, 1.0, 200, device=device),
+#         indexing="ij",
+#     ),
+#     dim=-1,
+# ).view(-1, 2)
+
+# xyz_NH = inv_rosca_lambert(planar_coords)
+# in_fz = s2_in_fz_laue(xyz_NH, 11)
+
+# # use matplotlib to visualize in_fz
+# import matplotlib.pyplot as plt
+
+# plt.imshow(in_fz.view(200, 200).cpu().numpy(), origin="lower")
+# plt.show()
+# plt.savefig("in_fz.png")
+# plt.clf()
+
+# # do another figure that has a grid so individual pixels can be seen
+# plt.scatter(
+#     planar_coords[:, 0].cpu().numpy(),
+#     planar_coords[:, 1].cpu().numpy(),
+#     c=in_fz.cpu().numpy(),
+# )
+# plt.show()
+# plt.savefig("in_fz_grid.png")
+# plt.clf()
+
+
+# # make a gif cycling through the laue groups
+# # use matplotlib to make a gif
+# import matplotlib.animation as animation
+
+
+# def update_plot(i):
+#     in_fz = s2_in_fz_laue(xyz_NH, i + 1)
+#     plt.clf()
+#     plt.imshow(in_fz.view(200, 200).cpu().numpy(), vmin=0, vmax=1)
+#     plt.title(f"Laue group {i + 1}")
+#     return plt
+
+
+# fig = plt.figure()
+# ani = animation.FuncAnimation(fig, update_plot, frames=11, interval=500)
+# ani.save("laue_fz.gif", writer="imagemagick", fps=1)
 
 
 @torch.jit.script
@@ -130,6 +181,14 @@ def s2_to_fz_laue(points: Tensor, laue_id: int) -> Tensor:
 
     # find the points that are in the s2 fundamental zone
     cond = s2_in_fz_laue(equivalent_points, laue_id)
+
+    # # in cases of more than one true value, set the first one to true
+    # more_trues = torch.sum(cond, dim=-1) >= 2
+    # cond[more_trues, 1:] = False
+
+    # # in cases of no true values, set the first one to true
+    # non_true = torch.sum(cond, dim=-1) == 0
+    # cond[non_true, 0] = True
 
     return equivalent_points[cond].reshape(data_shape)
 
