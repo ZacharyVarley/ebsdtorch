@@ -1,6 +1,11 @@
 """
+Author: Zachary T. Varley Date: 2025 License: MIT
+
+PCA via Direct Batched Covariance Matrix Updates
+-----------------------------
+
 This file contains a batched streamed implementation of PCA based on Welford's
-online algorithm extended by Chan et al for covariance matrices.
+online algorithm extended by Chan et al for covariance updates:
 
 Welford, B. P. "Note on a method for calculating corrected sums of squares and
 products." Technometrics 4.3 (1962): 419-420.
@@ -9,6 +14,35 @@ Chan, Tony F., Gene H. Golub, and Randall J. LeVeque. "Updating formulae and a
 pairwise algorithm for computing sample variances." COMPSTAT 1982 5th Symposium
 held at Toulouse 1982: Part I: Proceedings in Computational Statistics.
 Physica-Verlag HD, 1982.
+
+This works fine for low-dimensional data.
+
+
+Online PCA Methods
+-----------------------------
+
+The quadratic memory dependence of the full covariance matrix is not tolerable
+for large dimensionality. Therefore, we resort to well known top-k component
+online PCA methods. The batch Oja update rule with a decaying learning rate and
+implicit matrix Krasulina update are two well-studied methods for this purpose.
+If you search "Online Batch Incremental PCA" etc. you will find a plethora of
+irrelevant suggestions that veer off from the core mathematical proofs and
+derivations.
+
+See the following papers for more information:
+
+Allen-Zhu, Zeyuan, and Yuanzhi Li. “First Efficient Convergence for Streaming
+K-PCA: A Global, Gap-Free, and Near-Optimal Rate.” 2017 IEEE 58th Annual
+Symposium on Foundations of Computer Science (FOCS), IEEE, 2017, pp. 487–92.
+DOI.org (Crossref), https://doi.org/10.1109/FOCS.2017.51.
+
+Tang, Cheng. “Exponentially Convergent Stochastic K-PCA without Variance
+Reduction.” Advances in Neural Information Processing Systems, vol. 32, 2019.
+
+Amid, Ehsan, and Manfred K. Warmuth. “An Implicit Form of Krasulina’s k-PCA
+Update without the Orthonormality Constraint.” Proceedings of the AAAI
+Conference on Artificial Intelligence, vol. 34, no. 04, Apr. 2020, pp. 3179–86.
+DOI.org (Crossref), https://doi.org/10.1609/aaai.v34i04.5715.
 
 """
 

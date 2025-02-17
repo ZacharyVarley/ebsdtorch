@@ -201,20 +201,15 @@ def rs2cc_fast_(
         dim=1,
     )
 
-    f_lmkb = torch.einsum("lmk,bml->lmkb", d_lmk[:, (B - 1) :, :], f)
-    g_lknb = torch.einsum("lkn,bnl->lknb", d_lmk, g_n_aug)
-    cc = torch.einsum("lmkb,lknb->bmkn", f_lmkb, g_lknb)
+    f_lmkb = torch.einsum("lmk,bml->blmk", d_lmk[:, (B - 1) :, :], f)
+    g_lknb = torch.einsum("lkn,bnl->blkn", d_lmk[:, :, (B - 1) :], g.conj())
+    cc = torch.einsum("blmk,blkn->bmkn", f_lmkb, g_lknb)
 
     # Need to do fftshift so that the low frequencies are at the periphery
-    cc = ifftshift(cc, dim=(-1, -2))
+    cc = ifftshift(cc, dim=(-2))
 
     # dim=(..., -3) means the half dimension is the -3 dimension (m)
-    cc = irfftn(
-        cc,
-        s=(2 * B - 1, 2 * B - 1, 2 * B - 1),
-        dim=(-1, -2, -3),
-        norm="forward",
-    )
+    cc = irfftn(cc, s=(2 * B - 1,) * 3, dim=(-1, -2, -3), norm="forward")
 
     return cc
 
@@ -341,8 +336,20 @@ def cs2cc_(
 # dh_grid = grid_DriscollHealy(L, dtype=dtype).to(device)
 # xyz_grid = theta_phi_to_xyz(dh_grid)
 
-# mp_fname = "../EMs/EMplay/old/Si-master-20kV.h5"
-# mp = read_master_pattern(mp_fname).to(device).to(dtype)
+# # mp_fname = "../EMs/EMplay/old/Si-master-20kV.h5"
+# # mp = read_master_pattern(mp_fname).to(device).to(dtype)
+
+# from kikuchipy.data import ebsd_master_pattern
+# import numpy as np
+# from ebsdtorch.io.read_master_pattern import MasterPattern
+
+# mp_kp = ebsd_master_pattern(
+#     "Ni", allow_download=True, show_progressbar=True, projection="lambert"
+# )
+# hsphere = torch.tensor(np.array(mp_kp.data[-1]), device=device, dtype=torch.float32)
+# hsphere = (hsphere - hsphere.min()) / (hsphere.max() - hsphere.min())
+# mp_tensors = (hsphere, hsphere)
+# mp = MasterPattern(mp_tensors, laue_group=11)
 
 # mp.normalize("minmax")
 
@@ -356,7 +363,7 @@ def cs2cc_(
 #     virtual_binning=1,
 # ).squeeze(0)
 
-# mp_spherical_img -= mp_spherical_img.mean()
+# # mp_spherical_img -= mp_spherical_img.mean()
 
 # mp_spherical_r_coeffs = sht_real.fsht(mp_spherical_img.unsqueeze(0))
 # mp_spherical_c_coeffs = sht_comp.fsht(mp_spherical_img.unsqueeze(0))
@@ -377,8 +384,8 @@ def cs2cc_(
 # mp_spherical_img_recon_r = sht_real_trunc.isht(mp_spherical_r_coeffs)
 # mp_spherical_img_recon_c = sht_comp_trunc.isht(mp_spherical_c_coeffs)
 
-# ideal_max_r = (mp_spherical_img_recon_r**2).sum().item()
-# ideal_max_c = (mp_spherical_img_recon_c**2).abs().sum().item()
+# ideal_max_r = (mp_spherical_img_recon_r).mean().item()
+# ideal_max_c = (mp_spherical_img_recon_c).abs().mean().item()
 
 # print(f"ideal_max_r: {ideal_max_r}")
 # print(f"ideal_max_c: {ideal_max_c}")
@@ -415,7 +422,7 @@ def cs2cc_(
 # print(f"cc_c min/max: {cc_c.min().item()}, {cc_c.max().item()}")
 
 # # # min across both
-# # minval = min(cc_r.min().item(), cc_c.min().item())
+# # minval = min(cc_r.min().item(), cc_c.min().item(
 # # maxval = max(cc_r.max().item(), cc_c.max().item())
 
 # # cc_c = (cc_c - minval) / (maxval - minval)
@@ -479,7 +486,7 @@ def cs2cc_(
 # import time
 
 # n_iters = 10
-# batch_size = 4
+# batch_size = 1
 # mp_spherical_r_coeffs_batch = mp_spherical_r_coeffs.repeat(batch_size, 1, 1)
 
 # cc_r = rs2cc_(L_trunc, mp_spherical_r_coeffs, mp_spherical_r_coeffs_batch, wigner_table)

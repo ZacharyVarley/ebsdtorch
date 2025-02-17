@@ -17,26 +17,26 @@ def get_local_orientation_grid(
     axial_grid_dimension: int = 3,
 ) -> Tensor:
     """
-    Get the local orientation grid using cubochoric coordinates.
-    The grid will be a cube with 2*semi_edge_in_degrees side length
-    and (2*kernel_radius + 1)^3 grid points.
+    Get the local orientation grid using cubochoric coordinates. The grid will
+    be a cube with 2*semi_edge_in_degrees side length and (2*kernel_radius +
+    1)^3 grid points.
 
     The cubochoric box with the identity orientation centered at the origin
     extends from -0.5 * (pi)^(2/3) to 0.5 * (pi)^(2/3) along each axis. The
     points on the outside surface are 180 degree rotations.
 
-    A convient equal volume subgrid around the origin can be mapped to quaternions
-    and used to explore the space of orientations around the initial guess via
-    rotational composition.
+    A convenient equal volume subgrid around the origin can be mapped to
+    quaternions and used to explore the space of orientations around the initial
+    guess via rotational composition.
 
     Args:
-        semi_edge_in_degrees (float): The semi-edge in degrees.
-        divisions_per_dimension (int): The number of divisions per dimension.
-        biaxial (bool): If True, grid is 3 orthogonal planes. Points of form:
-            [a, b, 0], [0, b, c], [a, 0, c]. For 3x3x3, 4 corners are missing.
+        :semi_edge_in_degrees (float): The semi-edge of the grid in degrees.
+        :kernel_radius_in_steps (int): Divisions per side of the kernel.
+        :axial_grid_dimension (int): Defaults to 3 (complete outer product). 2
+        excluded cube corners. 1 only has the axial points.
 
     Returns:
-        Tuple[Tensor, Tensor]: The local orientation grid in cu and qu form.
+        cu (Tensor): The local orientation grid in cubochoric coordinates.
 
     """
 
@@ -81,7 +81,7 @@ def orientation_grid_refinement(
     shrink_factor: float = 0.5,
     average_pattern_center: bool = True,
     match_dtype: torch.dtype = torch.float16,
-) -> None:
+) -> torch.Tensor:
     """
     Refine the orientation of the EBSD patterns.
 
@@ -116,14 +116,21 @@ def orientation_grid_refinement(
 
     if not average_pattern_center:
         # broadcast subtract the sample scan coordinates from the detector coords
-        detector_coords = detector_coords - experiment_patterns.spatial_coords
-        # uses an individual pattern for every position in the scan
+        detector_coords = detector_coords[None, :, :] + torch.cat(
+            [
+                experiment_patterns.spatial_coords[:, None, :],
+                torch.zeros_like(experiment_patterns.spatial_coords[:, None, [-1]]),
+            ],
+            dim=-1,
+        )
 
     # normalize the detector coordinates to be unit vectors
     detector_coords = detector_coords / detector_coords.norm(dim=-1, keepdim=True)
 
     # get a list of indices into the experiment patterns for each phase
     phase_indices = experiment_patterns.get_indices_per_phase()
+
+    all_dots = []
 
     for i, indices in enumerate(phase_indices):
         mp = master_patterns[i]
@@ -141,6 +148,10 @@ def orientation_grid_refinement(
             )
             .view(1, -1, 3)
             .to(detector_coords.device)
+        )
+
+        dots = torch.zeros(
+            (experiment_patterns.n_patterns, n_iter), device=detector_coords.device
         )
 
         for indices_batch in pb:
@@ -164,7 +175,7 @@ def orientation_grid_refinement(
             # shape (N_EXP_PATS, 4)
             qu_current = experiment_patterns.get_orientations(indices_batch)
 
-            for _ in range(n_iter):
+            for j in range(n_iter):
                 # convert the cu_grid to quaternions
                 qu_grid = cu2qu(cu_grid_current)
 
@@ -176,10 +187,16 @@ def orientation_grid_refinement(
                 qu_augmented = ori_to_fz_laue(qu_augmented, mp.laue_group)
 
                 # apply the qu_augmented to the detector coordinates
-                # shape (N_EXP_PATS, N_GRID_POINTS = N_SIM_PATS, N_DETECTOR_PIXELS, 3)
-                detector_coords_rotated = qu_apply(
-                    qu_augmented[:, :, None, :], detector_coords[None, None, :, :]
-                )
+                # shape (N_EXP_PATS, N_SIM_PATS, N_DETECTOR_PIXELS, 3)
+                if average_pattern_center:
+                    detector_coords_rotated = qu_apply(
+                        qu_augmented[:, :, None, :], detector_coords[None, None, :, :]
+                    )
+                else:
+                    detector_coords_rotated = qu_apply(
+                        qu_augmented[:, :, None, :],
+                        detector_coords[indices_batch][:, None, :, :],
+                    )
 
                 # interpolate the master pattern
                 # shape (N_EXP_PATS, N_SIM_PATS, N_DETECTOR_PIXELS)
@@ -204,7 +221,10 @@ def orientation_grid_refinement(
 
                 # get the best dot product
                 # shape (N_EXP_PATS,)
-                _, best_indices = torch.max(dot_products, dim=-1)
+                best_dots, best_indices = torch.max(dot_products, dim=-1)
+
+                # update the dots
+                dots[indices_batch, j] = best_dots
 
                 # update center of the grid
                 qu_current = qu_augmented[
@@ -218,6 +238,10 @@ def orientation_grid_refinement(
 
             # update the experiment patterns
             experiment_patterns.set_orientations(qu_current, indices_batch)
+
+        all_dots.append(dots)
+
+    return all_dots
 
 
 def orientation_grad_refinement(

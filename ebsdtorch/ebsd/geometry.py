@@ -4,11 +4,16 @@ This module contains classes for managing the geometry of EBSD experiments. The
 geometry is defined by the relationship between the detector and sample
 coordinate reference frames. The PointEBSDGeometry class assumes that the sample
 surface is a single point in 3D space. The true relationship between the
-coordinate frames assuming the sample is perfectly planar, with it's step size
-between dwell points exactly situated and known, is a 2D homography, an element
-of SL(2), without the shear and anisotropic scaling of the plane: an 8-2=6
-degree of freedom transformation. For ease of implementation, I chose to instead
-use the SE(3) Lie Group and algebra to model the same transformation.
+coordinate frames assuming the sample is perfectly planar, is a 2D homography,
+an element of SL(2). If the angle between the unit vectors spanning each frame
+are exactly known, then there is neither shear nor anisotropic stretching of the
+plane, reducing the transformation by 2 degree of freedom from 8 to 6. For ease
+of implementation, I chose to instead use the SE(3) Lie Group and algebra to
+model the same transformation.
+
+I made a still unresolved error in naively using Rodrigues' formula and its
+extension to 3D Euclidean motions to model the transformation. The error is that
+the naive implementation in PyTorch has known extreme numerical instability.
 
 """
 

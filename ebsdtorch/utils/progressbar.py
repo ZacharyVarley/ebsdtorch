@@ -44,7 +44,7 @@ def progressbar(it, prefix="", prefix_min_length=15, size=60, out=sys.stdout):
         )
 
         # current iterations per second
-        ips = 1.0 / seconds_per_iteration
+        ips = 1.0 / (seconds_per_iteration + 1e-8)
         speed_str = f"{ips:04.1f} itr/s" if ips > 1.0 else f"{1.0/ips:04.1f} s/itr"
 
         print(

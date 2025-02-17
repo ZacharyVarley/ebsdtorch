@@ -474,6 +474,7 @@ def sample_ori_fz_laue(
     laue_id: int,
     target_n_samples: int,
     device: torch.device,
+    permute: bool = True,
 ) -> Tensor:
     """
 
@@ -486,6 +487,7 @@ def sample_ori_fz_laue(
         laue_id: integer between 1 and 11 inclusive
         target_n_samples: number of samples to use on the fundamental sector of SO(3)
         device: torch device to use
+        permute: whether or not to randomly permute the samples
 
     Returns:
         torch tensor of shape (n_samples, 4) containing the sampled orientations
@@ -505,7 +507,8 @@ def sample_ori_fz_laue(
     so3_samples_fz = so3_samples[ori_in_fz_laue(so3_samples, laue_id)]
 
     # randomly permute the samples
-    so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
+    if permute:
+        so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
 
     return so3_samples_fz
 

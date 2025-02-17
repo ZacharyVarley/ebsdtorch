@@ -95,56 +95,51 @@ def rosca_lambert(pts: Tensor) -> Tensor:
 @torch.jit.script
 def inv_rosca_lambert(pts: Tensor) -> Tensor:
     """
-    Map (-1, 1) X (-1, 1) square to Northern hemisphere via inverse square lambert projection.
+    Map (-1, 1) X (-1, 1) square to Northern hemisphere via inverse square
+    lambert projection.
 
     Args:
         pts: torch tensor of shape (..., 2) containing the points
+
     Returns:
         torch tensor of shape (..., 3) containing the projected points
 
+    This version is more efficient than the previous one, as it just plops
+    everything into the first quadrant, then swaps the x and y coordinates
+    if needed so that we always have x >= y. Then swaps back at the end and
+    copy the sign of the original x and y coordinates.
+
     """
-
-    # get shape of input
-    shape_in = pts.shape[:-1]
-    n_pts = int(torch.prod(torch.tensor(shape_in)))
-
-    pts = pts.view(-1, 2)
-
     pi = torch.pi
-
-    a = pts[:, 0] * (pi / 2) ** 0.5
-    b = pts[:, 1] * (pi / 2) ** 0.5
-
-    # mask for branch
-    cond = torch.abs(b) <= torch.abs(a)
-
-    output = torch.empty((n_pts, 3), dtype=pts.dtype, device=pts.device)
-
-    output[cond, 0] = (
-        (2 * a[cond] / pi)
-        * torch.sqrt(pi - a[cond] ** 2)
-        * torch.cos((pi * b[cond]) / (4 * a[cond]))
+    # map to first quadrant and swap x and y if needed
+    x_abs, y_abs = (
+        torch.abs(pts[..., 0]) * (pi / 2) ** 0.5,
+        torch.abs(pts[..., 1]) * (pi / 2) ** 0.5,
     )
-    output[cond, 1] = (
-        (2 * a[cond] / pi)
-        * torch.sqrt(pi - a[cond] ** 2)
-        * torch.sin((pi * b[cond]) / (4 * a[cond]))
-    )
-    output[cond, 2] = 1 - (2 * a[cond] ** 2 / pi)
+    cond = x_abs >= y_abs
+    x_new = torch.where(cond, x_abs, y_abs)
+    y_new = torch.where(cond, y_abs, x_abs)
 
-    output[~cond, 0] = (
-        (2 * b[~cond] / pi)
-        * torch.sqrt(pi - b[~cond] ** 2)
-        * torch.sin((pi * a[~cond]) / (4 * b[~cond]))
+    # only one case now
+    x_hs = (
+        (2 * x_new / pi)
+        * torch.sqrt(pi - x_new**2)
+        * torch.cos(pi * y_new / (4 * x_new))
     )
-    output[~cond, 1] = (
-        (2 * b[~cond] / pi)
-        * torch.sqrt(pi - b[~cond] ** 2)
-        * torch.cos((pi * a[~cond]) / (4 * b[~cond]))
+    y_hs = (
+        (2 * x_new / pi)
+        * torch.sqrt(pi - x_new**2)
+        * torch.sin(pi * y_new / (4 * x_new))
     )
-    output[~cond, 2] = 1 - (2 * b[~cond] ** 2 / pi)
+    z_out = 1 - (2 * x_new**2 / pi)
 
-    return output.reshape(shape_in + (3,))
+    # swap back and copy sign
+    x_out = torch.where(cond, x_hs, y_hs)
+    y_out = torch.where(cond, y_hs, x_hs)
+    x_out = x_out.copysign_(pts[..., 0])
+    y_out = y_out.copysign_(pts[..., 1])
+
+    return torch.stack((x_out, y_out, z_out), dim=-1)
 
 
 @torch.jit.script

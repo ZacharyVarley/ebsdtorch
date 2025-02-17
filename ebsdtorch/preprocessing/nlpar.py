@@ -1,6 +1,7 @@
 """
 This module implements non-local pattern averaging (NLPAR) to denoise EBSD
-patterns by averaging similar patterns with a square kernel.
+patterns by averaging similar patterns with a square kernel. I have some 
+more work to do to avoid the naive looping in Python over slices.
 
 The NLPAR algorithm is based on the following paper:
 
@@ -53,7 +54,7 @@ def nlpar(
         mode="constant",
         value=True,
     )
-    # pad the data tensor with inf so we can remove those values later
+    # pad the data tensor so we can remove those values later
     data_padded = torch.nn.functional.pad(
         data,
         (0,) * 4 + (k_rad,) * 4,

@@ -35,7 +35,7 @@ def test_ebsd_di_ni_pca(test_ebsd_di):
         mp,
         geom,
         exp_pats,
-        dictionary_resolution_degrees=10.0,
+        dictionary_resolution_learn_deg=10.0,
         dictionary_chunk_size=4096,
         signal_mask=None,
         virtual_binning=1,

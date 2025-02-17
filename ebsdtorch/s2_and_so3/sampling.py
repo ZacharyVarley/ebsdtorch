@@ -193,9 +193,12 @@ def so3_cubochoric_grid(edge_length: int, device: torch.device):
     cu = torch.linspace(
         -0.5 * torch.pi ** (2 / 3),
         0.5 * torch.pi ** (2 / 3),
-        edge_length,
+        edge_length + 1,  # add extra point at the opposite faces
         device=device,
     )
+    # remove the last point
+    cu = cu[:-1]
+
     cu = torch.stack(torch.meshgrid(cu, cu, cu, indexing="ij"), dim=-1).reshape(-1, 3)
     qu = cu2qu(cu)
     qu = qu_std(qu)
